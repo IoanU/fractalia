@@ -110,7 +110,6 @@ canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.button!==1)return;e
 canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const previous=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size!==1)return;if(dragAction==='select')updateSelection(e);else if(dragAction==='pan')pan(e.clientX-previous.x,e.clientY-previous.y);});
 canvas.addEventListener('pointerup',e=>{if(!pointers.has(e.pointerId))return;let next=null;if(pointers.size===1&&selection&&dragAction==='select'){updateSelection(e);const r=canvas.getBoundingClientRect();next=selectedView(state,selectionBounds(selection.start,selection.end,r.width,r.height),r.width,r.height);}pointers.delete(e.pointerId);cancelSelection();if(next){snipHistory.push({...state});if(snipHistory.length>30)snipHistory.shift();state=next;$('undoSnip').disabled=false;schedule(0);}});
 for(const event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,e=>{if(!pointers.has(e.pointerId))return;pointers.delete(e.pointerId);cancelSelection();});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selection){e.preventDefault();cancelSelection();}});
 $('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);$('resetBtn').onclick=()=>{const type=state.type;state=createState({type,cx:type==='mandelbrot'?'-.5':'0',cy:'0',span:type==='ship'?'4':'3.3',name:{mandelbrot:'The Mandelbrot set',julia:'Julia’s Garden',ship:'Burning Ship'}[type],palette:state.palette});state.name=type==='mandelbrot'?'The Mandelbrot set':state.name;sync();schedule();};
 $('fractal').onchange=e=>{const k={mandelbrot:'seahorse',julia:'julia',ship:'ship'}[e.target.value];loadPreset(k);};
 $('iterations').oninput=e=>{state.iterations=Number(e.target.value);state.auto=false;schedule(140);};$('autoDetail').onchange=e=>{state.auto=e.target.checked;schedule();};
@@ -119,7 +118,7 @@ $('colorShift').oninput=e=>{state.shift=Number(e.target.value);recolorView();};d
 function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),3500);}
 function openModal(title,body){$('modalTitle').textContent=title;$('modalBody').replaceChildren();if(typeof body==='string')$('modalBody').innerHTML=body;else $('modalBody').append(body);$('modal').showModal();}
 $('closeModal').onclick=()=>$('modal').close();$('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
-$('aboutBtn').onclick=()=>openModal('Controls',`<div class="modal-copy"><dl class="help-grid"><dt>Zoom</dt><dd>Draw a rectangle. Release to apply.</dd><dt>Pan</dt><dd><kbd>H</kbd> or <kbd>Shift</kbd> + drag</dd><dt>Select</dt><dd><kbd>V</kbd></dd><dt>Cancel</dt><dd><kbd>Esc</kbd></dd><dt>Zoom + / −</dt><dd><kbd>+</kbd> <kbd>−</kbd> or double-click</dd><dt>Move</dt><dd>Arrow keys</dd><dt>Reset</dt><dd><kbd>Home</kbd></dd></dl><div class="help-note">Views save automatically in the URL. Library saves stay in this browser. PNG exports use the canvas resolution. Deep zoom increases precision automatically; speed and visible detail depend on the iteration count and your device.</div></div>`);
+$('aboutBtn').onclick=()=>openModal('Controls',`<div class="modal-copy"><p>Close this dialog to use the explorer shortcuts.</p><dl class="help-grid"><dt>Zoom</dt><dd>In Select mode, draw a rectangle and release.</dd><dt>Pan</dt><dd>Press <kbd>H</kbd>, then drag. In Select mode, hold <kbd>Shift</kbd> while dragging.</dd><dt>Select</dt><dd><kbd>V</kbd></dd><dt>Cancel selection</dt><dd><kbd>Esc</kbd></dd><dt>Zoom + / −</dt><dd><kbd>+</kbd> <kbd>−</kbd> or double-click to zoom in</dd><dt>Move</dt><dd>Arrow keys</dd><dt>Reset</dt><dd><kbd>Home</kbd></dd></dl><div class="help-note">Views save automatically in the URL. Library saves stay in this browser. PNG exports use the canvas resolution. Deep zoom increases precision automatically; speed and visible detail depend on the iteration count and your device.</div></div>`);
 $('saveBtn').onclick=()=>{
   recolorCurrentFrame();
   if(rendering){toast('Wait for the render to finish before saving.');return;}
@@ -134,7 +133,26 @@ $('fullscreenBtn').onclick=async()=>{try{if(document.fullscreenElement)await doc
 document.addEventListener('fullscreenchange',()=>{cancelSelection();paintFrame();});
 $('exportBtn').onclick=()=>{if(rendering){toast('The image is rendering. Export when it is ready.');return;}recolorCurrentFrame();canvas.toBlob(blob=>{if(!blob)return;const link=document.createElement('a'),url=URL.createObjectURL(blob);link.href=url;link.download='fractalia-'+state.type+'-'+new Date().toISOString().slice(0,10)+'.png';link.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('PNG exported.');},'image/png');};
 $('coordsBtn').onclick=()=>{const f=document.createElement('form');f.className='coord-form';for(const [k,label]of[['cx','Real part (Re)'],['cy','Imaginary part (Im)'],['span','Viewport width in the complex plane']]){const l=document.createElement('label');l.textContent=label;const i=document.createElement('input');i.id='coord-'+k;l.htmlFor=i.id;i.name=k;i.required=true;i.value=decimal(state[k],state.digits).replace(/0+$/,'').replace(/\.$/,'');i.autocomplete='off';i.spellcheck=false;f.append(l,i);}const b=document.createElement('button');b.className='button';b.textContent='Apply';f.append(b);f.onsubmit=e=>{e.preventDefault();try{const data=new FormData(f);let needed=state.digits;for(const v of data.values()){const m=v.match(/e-(\d+)/i);if(m)needed=Math.max(needed,Number(m[1])+30);needed=Math.max(needed,(v.split('.')[1]||'').split(/[eE]/)[0].length+20);}if(needed>100000)throw Error('The requested precision exceeds the resources of this session.');const next={...state,digits:needed,name:'Your coordinates'};for(const k of ['cx','cy','span'])next[k]=parseDecimal(data.get(k),needed).toString();if(BigInt(next.span)<=0n)throw Error('Viewport width must be positive.');if(Math.abs(numeric(next.cx,needed))>100||Math.abs(numeric(next.cy,needed))>100||numeric(next.span,needed)>1000)throw Error('Choose coordinates between −100 and 100, and a viewport width up to 1000.');state=ensurePrecision(next);sync();schedule();$('modal').close();}catch(error){toast(error.message);}};openModal('Coordinates',f);};
-canvas.addEventListener('keydown',e=>{let handled=true;switch(e.key){case'v':case'V':setInteractionMode('select');break;case'h':case'H':setInteractionMode('pan');break;case'+':case'=':zoom(.5);break;case'-':zoom(2);break;case'ArrowLeft':pan(70,0);break;case'ArrowRight':pan(-70,0);break;case'ArrowUp':pan(0,70);break;case'ArrowDown':pan(0,-70);break;case'Home':$('resetBtn').click();break;default:handled=false;}if(handled)e.preventDefault();});
+document.addEventListener('keydown',e=>{
+  if(e.defaultPrevented||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||$('modal').open)return;
+  if(e.target?.isContentEditable||e.target?.closest?.('input, select, textarea'))return;
+  switch(e.key){
+    case 'v': case 'V': setInteractionMode('select');break;
+    case 'h': case 'H': setInteractionMode('pan');break;
+    case '+': case '=': zoom(.5);break;
+    case '-': zoom(2);break;
+    case 'ArrowLeft': pan(70,0);break;
+    case 'ArrowRight': pan(-70,0);break;
+    case 'ArrowUp': pan(0,70);break;
+    case 'ArrowDown': pan(0,-70);break;
+    case 'Home': $('resetBtn').click();break;
+    case 'Escape':
+      if(!selection)return;
+      cancelSelection();break;
+    default: return;
+  }
+  e.preventDefault();
+});
 new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(paintFrame,0);}).observe($('canvasShell'));
 function thumbnails(){document.querySelectorAll('[data-thumb]').forEach(c=>{const p=presets[c.dataset.thumb],w=c.width,h=c.height,im=c.getContext('2d').createImageData(w,h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const n=escapeFloat(Number(p.cx)+(x/w-.5)*Number(p.span),Number(p.cy)+(y-h/2)/w*Number(p.span),230,p.type,-.745,.186),rgb=colorAt(n,230,p.palette,0),i=(y*w+x)*4;im.data.set([...rgb,255],i);}c.getContext('2d').putImageData(im,0,0);});}
 state=createState(presets.seahorse);let restored=false;
