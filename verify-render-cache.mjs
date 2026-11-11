@@ -6,7 +6,8 @@ for(const [width,height] of [[1000,600],[1356,816],[1600,816]]){const p=framePla
 const small=new RenderCache({maxEntries:2,maxBytes:1000});const a={width:10,height:10},b={width:10,height:10},c={width:10,height:10};small.set('a',a);small.set('b',b);small.get('a');small.set('c',c);assert(!small.get('b'));assert.equal(b.width,0);assert.equal(small.bytes,800);
 let rect={left:0,top:0,width:1000,height:600},nextTimer=0,resize,workers=[];
 const jobs=new Map(),elements=new Map(),documentHandlers={};
-let lastPixels;const context=()=>({drawImage(){},fillRect(){},putImageData(image){lastPixels=image.pixels;}});
+let lastPixels,lastDraw;
+const context=()=>({drawImage(...args){lastDraw=args;},fillRect(){},putImageData(image){lastPixels=image.pixels;}});
 function element(){return{style:{setProperty(){}},dataset:{},classList:{add(){},remove(){},toggle(){}},textContent:'',innerHTML:'',hidden:false,value:'',width:0,height:0,getContext:context,setAttribute(){},getBoundingClientRect(){return rect},addEventListener(type,fn){this.handlers??={};this.handlers[type]=fn},setPointerCapture(){},focus(){}};}
 const swatches=['aurora','ember','ocean','moss','mono'].map(palette=>Object.assign(element(),{dataset:{palette}}));
 globalThis.document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id)},createElement:element,querySelector:element,querySelectorAll(selector){return selector==='[data-palette]'?swatches:[]},addEventListener(type,fn){documentHandlers[type]=fn}};
@@ -30,3 +31,35 @@ assert.equal(renderKey(workers[0].request.state,700),renderKey({...workers[0].re
 // A terminated older worker cannot replace the current completed image.
 const source=elements.get('fractalCanvas').dataset.renderSource;finish(workers[0]);assert.equal(elements.get('fractalCanvas').dataset.renderSource,source);
 console.log('Cache checks passed: native fullscreen raster, proportional center crop, memory/LRU eviction, in-flight fullscreen, repeated enter/exit (1 worker), cached zoom return, recolor without iteration, in-flight color changes, math invalidation and stale-worker isolation.');
+
+// Pan on a small raster so the entire field can be supplied to the app.
+rect={left:0,top:0,width:12,height:8};
+window.devicePixelRatio=1;window.screen={width:12,height:8};
+elements.get('zoomIn').onclick();flush();
+function finishField(worker,width,height,count){
+  const values=Float64Array.from({length:count},(_,i)=>i+.25);
+  worker.onmessage({data:{id:worker.request.id,width,height,values,step:1,done:true}});
+}
+finishField(workers.at(-1),12,8,96);
+const canvas=elements.get('fractalCanvas');
+const event=(x,y)=>({pointerId:1,button:0,clientX:x,clientY:y,shiftKey:true,preventDefault(){}});
+canvas.handlers.pointerdown(event(1,4));
+canvas.handlers.pointermove(event(4,2));
+assert.deepEqual(lastDraw.slice(1),[3,-2,12,8]);
+canvas.handlers.pointerup(event(4,2));
+flush();
+const panWorker=workers.at(-1);
+assert.deepEqual(panWorker.request.pan,{dx:-3,dy:2});
+finishField(panWorker,12,8,42);
+assert.equal(canvas.dataset.renderSource,'pan');
+assert.equal(lastPixels.length,12*2*4);
+swatches[2].onclick();flush();
+assert.equal(workers.at(-1),panWorker);
+assert.equal(lastPixels.length,12*8*4);
+canvas.handlers.pointerdown(event(1,4));
+canvas.handlers.pointermove(event(16,4));
+canvas.handlers.pointerup(event(16,4));
+flush();
+assert.notEqual(workers.at(-1),panWorker);
+assert.equal(workers.at(-1).request.pan,undefined);
+console.log('Pan shows the previous image immediately, computes exposed strips, keeps a recolorable field, and falls back when there is no overlap.');

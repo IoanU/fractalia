@@ -1,9 +1,10 @@
 import{numeric,parseDecimal,escapeFloat,zoomLog}from'./math.js';
+import{panOverlap}from'./render-cache.js';
 self.onmessage=({data:d})=>{
   try{render(d);}catch(error){postMessage({error:error.message,id:d.id});}
 };
 function render(d){
-  const s=d.state,W=d.width,H=d.height,max=d.iterations,p=s.digits,S=10n**BigInt(p),cx=BigInt(s.cx),cy=BigInt(s.cy),span=BigInt(s.span),scale=numeric(span,p),cxn=numeric(cx,p),cyn=numeric(cy,p),deep=zoomLog(s)>11;
+  const s=d.state,W=d.width,H=d.height,max=d.iterations,p=s.digits,S=10n**BigInt(p),grid=d.grid??{cx:s.cx,cy:s.cy,x:0,y:0},cx=BigInt(grid.cx),cy=BigInt(grid.cy),span=BigInt(s.span),scale=numeric(span,p),cxn=numeric(cx,p),cyn=numeric(cy,p),deep=zoomLog(s)>11;
   const jr=parseDecimal(s.jr,p),ji=parseDecimal(s.ji,p),limit=256n*S*S;
   function exact(px,py){
     let cr=cx+span*BigInt(Math.round((px/W-.5)*1e9))/1000000000n,ci=cy+span*BigInt(Math.round((py-H/2)/W*1e9))/1000000000n;
@@ -27,9 +28,28 @@ function render(d){
       if(m<1e-7*(rx*rx+ry*ry))return exact(px,py);
     }return max;
   }
-  const start=performance.now();let steps=deep?[12,5,2,1]:[6,2,1];
+  function sample(x,y){
+    const px=x+grid.x,py=y+grid.y;
+    if(deep)return orbit?perturb(px,py):exact(px,py);
+    return escapeFloat(cxn+(px/W-.5)*scale,cyn+(py-H/2)/W*scale,max,s.type,s.jr,s.ji);
+  }
+  const start=performance.now();
+  if(d.pan){
+    const {left,right,top,bottom}=panOverlap(W,H,d.pan.dx,d.pan.dy);
+    const values=new Float64Array(W*H-(right-left)*(bottom-top));
+    let index=0;
+    for(let y=0;y<H;y++){
+      const overlaps=y>=top&&y<bottom;
+      const firstEnd=overlaps?left:W;
+      for(let x=0;x<firstEnd;x++)values[index++]=sample(x+.5,y+.5);
+      if(overlaps)for(let x=right;x<W;x++)values[index++]=sample(x+.5,y+.5);
+    }
+    postMessage({id:d.id,width:W,height:H,values,step:1,done:true,elapsed:Math.round(performance.now()-start),deep},[values.buffer]);
+    return;
+  }
+  const steps=deep?[12,5,2,1]:[6,2,1];
   for(const step of steps){const w=Math.ceil(W/step),h=Math.ceil(H/step),values=new Float64Array(w*h);
-    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const px=(x+.5)*step,py=(y+.5)*step;values[y*w+x]=deep?(orbit?perturb(px,py):exact(px,py)):escapeFloat(cxn+(px/W-.5)*scale,cyn+(py-H/2)/W*scale,max,s.type,s.jr,s.ji);}
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++)values[y*w+x]=sample((x+.5)*step,(y+.5)*step);
     postMessage({id:d.id,width:w,height:h,values,step,done:step===1,elapsed:Math.round(performance.now()-start),deep},[values.buffer]);
   }
 }

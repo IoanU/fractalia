@@ -1,14 +1,14 @@
 import{parseDecimal,decimal,numeric,zoomLog,ensurePrecision,escapeFloat,colorAt}from'./math.js';
 import{selectionBounds,selectedView}from'./selection.js';
-import{RenderCache,renderKey,rasterPlan,framePlacement}from'./render-cache.js';
+import{RenderCache,renderKey,rasterPlan,framePlacement,mergePanField,panOverlap}from'./render-cache.js';
 import{colorize}from'./colorize.js';
 const $=id=>document.getElementById(id),canvas=$('fractalCanvas'),ctx=canvas.getContext('2d',{alpha:false}),scratch=document.createElement('canvas'),sctx=scratch.getContext('2d');
 const presets={seahorse:{name:'Seahorse Valley',type:'mandelbrot',cx:'-.7453',cy:'.1127',span:'.012',palette:'aurora'},julia:{name:'Julia’s Garden',type:'julia',cx:'0',cy:'0',span:'3.3',palette:'ocean'},ship:{name:'Burning Shores',type:'ship',cx:'-1.755',cy:'-.032',span:'.085',palette:'ember'}};
 let state,worker,timer,resizeTimer,renderId=0,rendering=false,toastTimer,pointers=new Map(),saved=[];
-let interactionMode='select',selection=null,dragAction=null,snipHistory=[];
+let interactionMode='select',selection=null,dragAction=null,panRemainder=null,snipHistory=[];
 let lastPersistedView='';
 const renderCache=new RenderCache();
-let displayFrame=null,activeRenderKey='',renderCount=0;
+let displayFrame=null,lastReadyFrame=null,pendingPan=null,activeRenderKey='',renderCount=0;
 let recolorQueued=false,recolorCount=0;
 try{saved=JSON.parse(localStorage.getItem('fractalia.collection')||'[]');if(!Array.isArray(saved))saved=[];}catch{}
 const legacyNames={'Valea căluților de mare':'Seahorse Valley','Grădina Juliei':'Julia’s Garden','Corăbii de foc':'Burning Shores','Creația ta Julia':'Your Julia creation','Universul Mandelbrot':'The Mandelbrot set','Coordonatele tale':'Your coordinates','O nouă perspectivă':'A new perspective'};
@@ -34,20 +34,52 @@ function persistCurrentView(){
   try{sessionStorage.setItem('fractalia.currentView',JSON.stringify({address:location.href,view:state}));}catch{}
   lastPersistedView=serialized;
 }
+function rasterFor(rect){
+  return rasterPlan({width:Math.max(1,rect.width),height:Math.max(1,rect.height),screenWidth:window.screen?.width,screenHeight:window.screen?.height,dpr:window.devicePixelRatio||1});
+}
 function paintFrame(){
   const rect=canvas.getBoundingClientRect();if(rect.width<=0||rect.height<=0)return;
   const dpr=window.devicePixelRatio||1,w=Math.max(1,Math.round(rect.width*dpr)),h=Math.max(1,Math.round(rect.height*dpr));
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
   if(!displayFrame||!displayFrame.width)return;
-  const p=framePlacement(displayFrame,w,h);ctx.fillStyle='#0a0d15';ctx.fillRect(0,0,w,h);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.fillStyle='#0a0d15';ctx.fillRect(0,0,w,h);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  if(pendingPan){
+    const {source,dx,dy}=pendingPan,scale=w/source.width,height=source.height*scale;
+    ctx.drawImage(source,-dx*scale,(h-height)/2-dy*scale,w,height);
+    return;
+  }
+  const p=framePlacement(displayFrame,w,h);
   ctx.drawImage(displayFrame,p.sx,p.sy,p.sw,p.sh,p.dx,p.dy,p.dw,p.dh);
 }
-function applyFrameColors(frame){
+function applyFrameColors(frame,reuse,exposed){
   const colorKey=state.palette+':'+state.shift;if(!frame.field||frame.colorKey===colorKey)return;
-  const pixels=colorize(frame.field,frame.iterations,state.palette,state.shift);
-  scratch.width=frame.fieldWidth;scratch.height=frame.fieldHeight;sctx.putImageData(new ImageData(pixels,frame.fieldWidth,frame.fieldHeight),0,0);
-  const frameContext=frame.getContext('2d',{alpha:false});frameContext.imageSmoothingEnabled=frame.step!==1;
-  frameContext.drawImage(scratch,0,0,frame.width,frame.height);frame.colorKey=colorKey;
+  const frameContext=frame.getContext('2d',{alpha:false});
+  if(reuse?.source.colorKey===colorKey){
+    const {source,dx,dy}=reuse,{width,height}=frame;
+    const {left,right,top,bottom}=panOverlap(width,height,dx,dy);
+    const overlapWidth=right-left,overlapHeight=bottom-top;
+    frameContext.drawImage(source,left+dx,top+dy,overlapWidth,overlapHeight,left,top,overlapWidth,overlapHeight);
+    const pixels=colorize(exposed,frame.iterations,state.palette,state.shift);
+    let offset=0;
+    // Each middle row exposes at most one side, so the side strip is contiguous.
+    const strips=[
+      [0,0,width,top],
+      [dx<0?0:right,top,width-overlapWidth,overlapHeight],
+      [0,bottom,width,height-bottom]
+    ];
+    for(const [x,y,w,h] of strips){
+      if(!w||!h)continue;
+      const end=offset+w*h*4;
+      frameContext.putImageData(new ImageData(pixels.subarray(offset,end),w,h),x,y);
+      offset=end;
+    }
+  }else{
+    const pixels=colorize(frame.field,frame.iterations,state.palette,state.shift);
+    scratch.width=frame.fieldWidth;scratch.height=frame.fieldHeight;sctx.putImageData(new ImageData(pixels,frame.fieldWidth,frame.fieldHeight),0,0);
+    frameContext.imageSmoothingEnabled=frame.step!==1;
+    frameContext.drawImage(scratch,0,0,frame.width,frame.height);
+  }
+  frame.colorKey=colorKey;
   canvas.dataset.recolorCount=String(++recolorCount);canvas.dataset.colorKey=colorKey;
 }
 function recolorCurrentFrame(){
@@ -61,33 +93,41 @@ function recolorView(){
 }
 function readyFrame(frame,source){
   applyFrameColors(frame);
-  displayFrame=frame;rendering=false;canvas.dataset.renderSource=source;$('progress').style.width='0';
+  displayFrame=lastReadyFrame=frame;pendingPan=null;rendering=false;canvas.dataset.renderSource=source;$('progress').style.width='0';
   $('renderStatus').innerHTML='<i></i><span class="sr-only">Ready</span>';paintFrame();
 }
 function stopRender(){clearTimeout(timer);timer=null;++renderId;if(worker){worker.terminate();worker=null;}}
-function schedule(delay=60){
+function schedule(delay=60,reuse=null){
   persistCurrentView();sync();const key=renderKey(state,currentIterations()),cached=renderCache.get(key);
   if(cached){stopRender();activeRenderKey=key;readyFrame(cached,'cache');return;}
   if(activeRenderKey===key&&(worker||timer!==null&&timer!==undefined))return;
-  stopRender();activeRenderKey=key;rendering=true;$('renderStatus').innerHTML='<i></i><span>Rendering</span>';$('progress').style.width='12%';
+  stopRender();activeRenderKey=key;pendingPan=reuse;rendering=true;$('renderStatus').innerHTML='<i></i><span>Rendering</span>';$('progress').style.width='12%';
+  if(reuse)paintFrame();
   timer=setTimeout(()=>{timer=null;render(key);},delay);
 }
 function render(key){
   const rect=canvas.getBoundingClientRect(),iterations=currentIterations(),snapshot={...state};
-  const plan=rasterPlan({width:Math.max(1,rect.width),height:Math.max(1,rect.height),screenWidth:window.screen?.width,screenHeight:window.screen?.height,dpr:window.devicePixelRatio||1});
+  const plan=rasterFor(rect);
+  if(pendingPan&&(pendingPan.source.width!==plan.width||pendingPan.source.height!==plan.height))pendingPan=null;
+  const reuse=pendingPan;
   const frame=document.createElement('canvas');frame.width=plan.width;frame.height=plan.height;frame.key=key;frame.iterations=iterations;
+  frame.view=snapshot;
+  frame.grid=reuse?.grid??{cx:snapshot.cx,cy:snapshot.cy,x:0,y:0};
   const currentWorker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});worker=currentWorker;const id=++renderId;
   canvas.dataset.renderCount=String(++renderCount);canvas.dataset.renderWidth=String(plan.width);canvas.dataset.renderHeight=String(plan.height);canvas.dataset.renderSource='worker';
-  const fail=message=>{if(id!==renderId)return;currentWorker.terminate();worker=null;activeRenderKey='';rendering=false;$('progress').style.width='0';$('renderStatus').innerHTML='<i></i> Render error';toast(message);};
+  const fail=message=>{if(id!==renderId)return;currentWorker.terminate();worker=null;activeRenderKey='';pendingPan=null;rendering=false;$('progress').style.width='0';$('renderStatus').innerHTML='<i></i> Render error';toast(message);};
   currentWorker.onmessage=({data:d})=>{
     if(id!==renderId||d.id!==id||activeRenderKey!==key)return;if(d.error){fail('Rendering failed. Try a lower detail level.');return;}
-    frame.field=d.values;frame.fieldWidth=d.width;frame.fieldHeight=d.height;frame.step=d.step;frame.colorKey='';
-    applyFrameColors(frame);displayFrame=frame;paintFrame();
+    frame.field=reuse?mergePanField(reuse.source.field,plan.width,plan.height,reuse.dx,reuse.dy,d.values):d.values;
+    frame.fieldWidth=d.width;frame.fieldHeight=d.height;frame.step=d.step;frame.colorKey='';
     $('progress').style.width=d.done?'0':d.step<=2?'80%':'40%';
-    if(d.done){renderCache.set(key,frame);currentWorker.terminate();worker=null;readyFrame(frame,'worker');}
+    if(d.done){applyFrameColors(frame,reuse,d.values);renderCache.set(key,frame);currentWorker.terminate();worker=null;readyFrame(frame,reuse?'pan':'worker');}
+    else{applyFrameColors(frame);displayFrame=frame;paintFrame();}
   };
   currentWorker.onerror=()=>fail('The renderer could not start.');
-  currentWorker.postMessage({id,state:snapshot,width:plan.width,height:plan.height,iterations});
+  const request={id,state:snapshot,width:plan.width,height:plan.height,iterations,grid:frame.grid};
+  if(reuse)request.pan={dx:reuse.dx,dy:reuse.dy};
+  currentWorker.postMessage(request);
 }
 function zoom(factor,x=.5,y=.5){
   cancelSelection();
@@ -95,8 +135,38 @@ function zoom(factor,x=.5,y=.5){
   if(next<=0n){ensurePrecision(state);return;}
   const ox=BigInt(Math.round((x-.5)*1e9)),oy=BigInt(Math.round((y-.5)*rect.height/rect.width*1e9));state.cx=(BigInt(state.cx)+(old-next)*ox/1000000000n).toString();state.cy=(BigInt(state.cy)+(old-next)*oy/1000000000n).toString();state.span=next.toString();ensurePrecision(state);schedule(100);
 }
-function pan(dx,dy){if(selection)cancelSelection();const r=canvas.getBoundingClientRect(),span=BigInt(state.span);state.cx=(BigInt(state.cx)-span*BigInt(Math.round(dx/r.width*1e9))/1000000000n).toString();state.cy=(BigInt(state.cy)-span*BigInt(Math.round(dy/r.width*1e9))/1000000000n).toString();schedule(100);}
-function cancelSelection(){selection=null;dragAction=null;$('selectionBox').hidden=true;$('canvasShell').classList.remove('is-selecting');}
+function panReuse(rect,cx,cy,span){
+  const source=lastReadyFrame;
+  if(!source||source.step!==1||source.field?.length!==source.width*source.height||source.iterations!==currentIterations())return null;
+  if(!['type','digits','span','jr','ji'].every(key=>source.view[key]===state[key]))return null;
+  const plan=rasterFor(rect);
+  if(plan.width!==source.width||plan.height!==source.height)return null;
+  const width=BigInt(plan.width),anchorX=BigInt(source.grid.cx),anchorY=BigInt(source.grid.cy);
+  // Snap to the old sampling grid so each copied pixel represents the same point.
+  const rasterOffset=delta=>{
+    const scaled=delta*width;
+    return Number((scaled+(scaled<0n?-span:span)/2n)/span);
+  };
+  const x=rasterOffset(cx-anchorX),y=rasterOffset(cy-anchorY),dx=x-source.grid.x,dy=y-source.grid.y;
+  if(Math.abs(dx)>=plan.width||Math.abs(dy)>=plan.height)return null;
+  // Recenter the reference periodically so deep perturbation stays local.
+  if(zoomLog(state)>11&&Math.max(Math.abs(x),Math.abs(y))>4*plan.width)return null;
+  return {source,dx,dy,grid:{...source.grid,x,y},cx:anchorX+span*BigInt(x)/width,cy:anchorY+span*BigInt(y)/width};
+}
+function pan(dx,dy,dragging=false){
+  if(selection)cancelSelection();
+  const rect=canvas.getBoundingClientRect(),span=BigInt(state.span);
+  if(rect.width<=0)return;
+  const delta=pixels=>span*BigInt(Math.round(pixels/rect.width*1e9))/1000000000n;
+  const cx=BigInt(state.cx)-delta(dx)+(dragging?panRemainder?.x??0n:0n);
+  const cy=BigInt(state.cy)-delta(dy)+(dragging?panRemainder?.y??0n:0n);
+  const reuse=panReuse(rect,cx,cy,span);
+  state.cx=(reuse?.cx??cx).toString();state.cy=(reuse?.cy??cy).toString();
+  // Carry subpixel movement across pointer events instead of rounding each one away.
+  panRemainder=dragging&&reuse?{x:cx-reuse.cx,y:cy-reuse.cy}:null;
+  schedule(100,reuse);
+}
+function cancelSelection(){selection=null;dragAction=null;panRemainder=null;$('selectionBox').hidden=true;$('canvasShell').classList.remove('is-selecting');}
 function setInteractionMode(mode){cancelSelection();interactionMode=mode;$('canvasShell').dataset.tool=mode;for(const [id,value]of[['selectTool','select'],['panTool','pan']]){$(id).classList.toggle('tool-active',mode===value);$(id).setAttribute('aria-pressed',mode===value);}$('interactionHint').innerHTML=mode==='select'?'Draw a rectangle to zoom. Escape cancels selection.':'Drag to pan. Shift also enables pan.';}
 function localPoint(e){const r=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(r.width,e.clientX-r.left)),y:Math.max(0,Math.min(r.height,e.clientY-r.top))};}
 function updateSelection(e){if(!selection)return;selection.end=localPoint(e);const r=canvas.getBoundingClientRect(),box=selectionBounds(selection.start,selection.end,r.width,r.height),el=$('selectionBox');el.hidden=box.width<2||box.height<2;Object.assign(el.style,{left:box.x+'px',top:box.y+'px',width:box.width+'px',height:box.height+'px'});const factor=Math.max(box.width/r.width,box.height/r.height);$('selectionLabel').textContent=factor>0?(1/factor).toLocaleString('en-US',{maximumFractionDigits:1})+'×':'';el.classList.toggle('compact',box.width<145||box.height<60);}
@@ -107,7 +177,7 @@ canvas.addEventListener('wheel',e=>{if(e.ctrlKey)e.preventDefault();},{passive:f
 for(const event of ['gesturestart','gesturechange','gestureend'])canvas.addEventListener(event,e=>e.preventDefault(),{passive:false});
 canvas.addEventListener('dblclick',e=>{const r=canvas.getBoundingClientRect();zoom(.4,(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);});
 canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size>1){cancelSelection();return;}canvas.focus({preventScroll:true});dragAction=interactionMode==='pan'||e.shiftKey||e.button===1?'pan':'select';if(dragAction==='select'){const point=localPoint(e);selection={start:point,end:point};$('canvasShell').classList.add('is-selecting');}});
-canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const previous=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size!==1)return;if(dragAction==='select')updateSelection(e);else if(dragAction==='pan')pan(e.clientX-previous.x,e.clientY-previous.y);});
+canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const previous=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size!==1)return;if(dragAction==='select')updateSelection(e);else if(dragAction==='pan')pan(e.clientX-previous.x,e.clientY-previous.y,true);});
 canvas.addEventListener('pointerup',e=>{if(!pointers.has(e.pointerId))return;let next=null;if(pointers.size===1&&selection&&dragAction==='select'){updateSelection(e);const r=canvas.getBoundingClientRect();next=selectedView(state,selectionBounds(selection.start,selection.end,r.width,r.height),r.width,r.height);}pointers.delete(e.pointerId);cancelSelection();if(next){snipHistory.push({...state});if(snipHistory.length>30)snipHistory.shift();state=next;$('undoSnip').disabled=false;schedule(0);}});
 for(const event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,e=>{if(!pointers.has(e.pointerId))return;pointers.delete(e.pointerId);cancelSelection();});
 $('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);$('resetBtn').onclick=()=>{const type=state.type;state=createState({type,cx:type==='mandelbrot'?'-.5':'0',cy:'0',span:type==='ship'?'4':'3.3',name:{mandelbrot:'The Mandelbrot set',julia:'Julia’s Garden',ship:'Burning Ship'}[type],palette:state.palette});state.name=type==='mandelbrot'?'The Mandelbrot set':state.name;sync();schedule();};

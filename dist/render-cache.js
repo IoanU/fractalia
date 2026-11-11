@@ -25,6 +25,37 @@ export function framePlacement(frame,width,height){
   return{sx:0,sy:0,sw:frame.width,sh:frame.height,dx:0,dy:(height-drawnHeight)/2,dw:width,dh:drawnHeight};
 }
 
+export function panOverlap(width,height,dx,dy){
+  return {
+    left:Math.max(0,-dx),
+    right:Math.min(width,width-dx),
+    top:Math.max(0,-dy),
+    bottom:Math.min(height,height-dy)
+  };
+}
+
+// The worker sends only samples outside the overlap, in raster order.
+export function mergePanField(source,width,height,dx,dy,exposed){
+  const {left,right,top,bottom}=panOverlap(width,height,dx,dy);
+  const field=new Float64Array(width*height);
+  let offset=0;
+  for(let y=0;y<height;y++){
+    const row=y*width;
+    if(y<top||y>=bottom){
+      field.set(exposed.subarray(offset,offset+width),row);
+      offset+=width;
+      continue;
+    }
+    const oldRow=(y+dy)*width+dx;
+    field.set(exposed.subarray(offset,offset+left),row);
+    field.set(source.subarray(oldRow+left,oldRow+right),row+left);
+    offset+=left;
+    field.set(exposed.subarray(offset,offset+width-right),row+right);
+    offset+=width-right;
+  }
+  return field;
+}
+
 export class RenderCache{
   constructor({maxEntries=3,maxBytes=96*1024*1024}={}){this.maxEntries=maxEntries;this.maxBytes=maxBytes;this.entries=new Map();this.bytes=0;}
   get(key){const frame=this.entries.get(key);if(frame){this.entries.delete(key);this.entries.set(key,frame);}return frame;}
