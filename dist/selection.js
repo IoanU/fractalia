@@ -1,4 +1,5 @@
 import {ensurePrecision} from './math.js';
+import {minimumSpan} from './formulas.js';
 
 export function selectionBounds(start,end,width,height){
   const clamp=(v,max)=>Math.max(0,Math.min(max,v));
@@ -16,6 +17,8 @@ export function selectedView(current,box,width,height){
   const x=(box.x+box.width/2)/width-.5,y=(box.y+box.height/2-height/2)/width;
   next.cx=(BigInt(next.cx)+span*BigInt(Math.round(x*1e9))/unit).toString();
   next.cy=(BigInt(next.cy)+span*BigInt(Math.round(y*1e9))/unit).toString();
-  next.span=(span*BigInt(Math.round(factor*1e9))/unit).toString();
+  const newSpan=span*BigInt(Math.round(factor*1e9))/unit;
+  if(newSpan<minimumSpan(next))return null;
+  next.span=newSpan.toString();
   return ensurePrecision(next);
 }

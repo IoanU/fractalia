@@ -1,10 +1,13 @@
 import{numeric,parseDecimal,escapeFloat,zoomLog}from'./math.js';
 import{panOverlap}from'./render-cache.js';
+import{compileRecipe}from'./formulas.js';
 self.onmessage=({data:d})=>{
   try{render(d);}catch(error){postMessage({error:error.message,id:d.id});}
 };
 function render(d){
-  const s=d.state,W=d.width,H=d.height,max=d.iterations,p=s.digits,S=10n**BigInt(p),grid=d.grid??{cx:s.cx,cy:s.cy,x:0,y:0},cx=BigInt(grid.cx),cy=BigInt(grid.cy),span=BigInt(s.span),scale=numeric(span,p),cxn=numeric(cx,p),cyn=numeric(cy,p),deep=zoomLog(s)>11;
+  const s=d.state,W=d.width,H=d.height,max=d.iterations,p=s.digits,S=10n**BigInt(p),grid=d.grid??{cx:s.cx,cy:s.cy,x:0,y:0},cx=BigInt(grid.cx),cy=BigInt(grid.cy),span=BigInt(s.span),scale=numeric(span,p),cxn=numeric(cx,p),cyn=numeric(cy,p);
+  const studio=s.type==='studio',deep=!studio&&zoomLog(s)>11;
+  const custom=studio?compileRecipe(s.recipe,max):null;
   const jr=parseDecimal(s.jr,p),ji=parseDecimal(s.ji,p),limit=256n*S*S;
   function exact(px,py){
     let cr=cx+span*BigInt(Math.round((px/W-.5)*1e9))/1000000000n,ci=cy+span*BigInt(Math.round((py-H/2)/W*1e9))/1000000000n;
@@ -31,7 +34,8 @@ function render(d){
   function sample(x,y){
     const px=x+grid.x,py=y+grid.y;
     if(deep)return orbit?perturb(px,py):exact(px,py);
-    return escapeFloat(cxn+(px/W-.5)*scale,cyn+(py-H/2)/W*scale,max,s.type,s.jr,s.ji);
+    const real=cxn+(px/W-.5)*scale,imag=cyn+(py-H/2)/W*scale;
+    return custom?custom(real,imag):escapeFloat(real,imag,max,s.type,s.jr,s.ji);
   }
   const start=performance.now();
   if(d.pan){

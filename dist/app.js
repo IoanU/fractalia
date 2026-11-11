@@ -2,6 +2,9 @@ import{parseDecimal,decimal,numeric,zoomLog,ensurePrecision,escapeFloat,colorAt}
 import{selectionBounds,selectedView}from'./selection.js';
 import{RenderCache,renderKey,rasterPlan,framePlacement,mergePanField,panOverlap}from'./render-cache.js';
 import{colorize}from'./colorize.js';
+import{catalog,studioHome}from'./catalog.js';
+import{formulas,minimumSpan,normalizeRecipe}from'./formulas.js';
+import{mountPresetCatalog,openStudio}from'./studio.js';
 const $=id=>document.getElementById(id),canvas=$('fractalCanvas'),ctx=canvas.getContext('2d',{alpha:false}),scratch=document.createElement('canvas'),sctx=scratch.getContext('2d');
 const presets={seahorse:{name:'Seahorse Valley',type:'mandelbrot',cx:'-.7453',cy:'.1127',span:'.012',palette:'aurora'},julia:{name:'Julia’s Garden',type:'julia',cx:'0',cy:'0',span:'3.3',palette:'ocean'},ship:{name:'Burning Shores',type:'ship',cx:'-1.755',cy:'-.032',span:'.085',palette:'ember'}};
 let state,worker,timer,resizeTimer,renderId=0,rendering=false,toastTimer,pointers=new Map(),saved=[];
@@ -13,15 +16,41 @@ let recolorQueued=false,recolorCount=0;
 try{saved=JSON.parse(localStorage.getItem('fractalia.collection')||'[]');if(!Array.isArray(saved))saved=[];}catch{}
 const legacyNames={'Valea căluților de mare':'Seahorse Valley','Grădina Juliei':'Julia’s Garden','Corăbii de foc':'Burning Shores','Creația ta Julia':'Your Julia creation','Universul Mandelbrot':'The Mandelbrot set','Coordonatele tale':'Your coordinates','O nouă perspectivă':'A new perspective'};
 function viewName(name){return legacyNames[name]||name||'Untitled view';}
-function createState(p){const digits=40;return{digits,cx:parseDecimal(p.cx,digits).toString(),cy:parseDecimal(p.cy,digits).toString(),span:parseDecimal(p.span,digits).toString(),type:p.type,palette:p.palette||'aurora',jr:-.745,ji:.186,shift:0,iterations:600,auto:true,name:p.name};}
-function validateState(s){if(!s||!['mandelbrot','julia','ship'].includes(s.type)||!['aurora','ember','ocean','moss','mono'].includes(s.palette)||!Number.isInteger(s.digits)||s.digits<20||s.digits>100000)throw Error('Invalid view.');for(const k of ['cx','cy','span'])if(!/^-?\d+$/.test(s[k])||s[k].length>100010)throw Error('Invalid coordinates.');if(BigInt(s.span)<=0n)throw Error('Invalid scale.');if(!Number.isFinite(s.jr)||!Number.isFinite(s.ji)||!Number.isFinite(s.shift)||!Number.isFinite(s.iterations))throw Error('Invalid parameters.');s.iterations=Math.max(100,Math.min(3000,s.iterations));s.shift=Math.max(0,Math.min(360,s.shift));return ensurePrecision(s);}
-function loadPreset(key){state=createState(presets[key]);sync();schedule();}
+function createState(p){
+  const digits=40,studio=p.type==='studio';
+  const view={digits,cx:parseDecimal(p.cx,digits).toString(),cy:parseDecimal(p.cy,digits).toString(),span:parseDecimal(p.span,digits).toString(),type:p.type,palette:p.palette||'aurora',jr:-.745,ji:.186,shift:0,iterations:studio?200:600,auto:!studio,name:p.name};
+  if(studio)view.recipe=normalizeRecipe(p.recipe);
+  return view;
+}
+function validateState(s){
+  if(!s||!['mandelbrot','julia','ship','studio'].includes(s.type)||!['aurora','ember','ocean','moss','mono'].includes(s.palette)||!Number.isInteger(s.digits)||s.digits<20||s.digits>100000)throw Error('Invalid view.');
+  for(const k of ['cx','cy','span'])if(!/^-?\d+$/.test(s[k])||s[k].length>100010)throw Error('Invalid coordinates.');
+  if(BigInt(s.span)<minimumSpan(s))throw Error('Invalid scale.');
+  if(!Number.isFinite(s.jr)||!Number.isFinite(s.ji)||!Number.isFinite(s.shift)||!Number.isFinite(s.iterations))throw Error('Invalid parameters.');
+  s.iterations=Math.max(100,Math.min(3000,s.iterations));
+  s.shift=Math.max(0,Math.min(360,s.shift));
+  if(s.type==='studio')s.recipe=normalizeRecipe(s.recipe);
+  return ensurePrecision(s);
+}
+function loadPreset(key){
+  const preset=catalog[key]??presets[key];
+  cancelSelection();
+  state=createState(preset);
+  if(preset.type==='studio')state.preset=key;
+  schedule();
+}
 function formatZoom(){const n=zoomLog(state);return n<6?Math.max(1,10**n).toLocaleString('en-US',{maximumFractionDigits:n<1?1:0})+'×':'10^'+n.toFixed(1)+'×';}
 function shortCoord(n){const v=numeric(n,state.digits);return(v>=0?'+':'')+v.toFixed(9).replace(/0+$/,'').replace(/\.$/,'');}
 function sync(){
-  $('fractal').value=state.type;$('juliaControls').hidden=state.type!=='julia';$('formula').innerHTML=state.type==='ship'?'z<sub>n+1</sub> = (|Re z| + i|Im z|)² + c':'z<sub>n+1</sub> = z<sub>n</sub>² + c <span>ℂ</span>';
+  const studio=state.type==='studio';
+  $('studioOption').hidden=!studio;
+  $('studioOption').textContent=studio?viewName(state.name):'Formula Studio';
+  $('fractal').value=state.type;$('juliaControls').hidden=state.type!=='julia';
+  if(studio)$('formula').textContent=state.recipe.mode==='lyapunov'?state.recipe.sequence:state.recipe.steps.map(step=>formulas[step.formula]+(step.repeat>1?' ×'+step.repeat:'')).join(' → ');
+  else $('formula').innerHTML=state.type==='ship'?'z<sub>n+1</sub> = (|Re z| + i|Im z|)² + c':'z<sub>n+1</sub> = z<sub>n</sub>² + c <span>ℂ</span>';
+  document.querySelectorAll('[data-fractal]').forEach(button=>button.setAttribute('aria-pressed',String(studio&&state.preset===button.dataset.fractal)));
   $('iterations').value=state.iterations;$('iterValue').textContent=currentIterations().toLocaleString('en-US');$('autoDetail').checked=state.auto;$('colorShift').value=state.shift;$('shiftValue').textContent=state.shift+'°';$('juliaRe').value=state.jr;$('juliaIm').value=state.ji;$('jrValue').textContent=state.jr.toFixed(3);$('jiValue').textContent=state.ji.toFixed(3);
-  $('viewName').textContent=viewName(state.name);$('familyBadge').textContent={mandelbrot:'MANDELBROT SET',julia:'JULIA SET',ship:'BURNING SHIP'}[state.type];$('zoomReadout').textContent=formatZoom();$('coordReadout').textContent=shortCoord(state.cx)+' / '+shortCoord(state.cy);$('coordsBtn').title='Edit exact center ('+state.digits+' decimal places)';$('precisionReadout').textContent=state.digits+' dp';
+  $('viewName').textContent=viewName(state.name);$('familyBadge').textContent={mandelbrot:'MANDELBROT SET',julia:'JULIA SET',ship:'BURNING SHIP',studio:'CUSTOM FRACTAL'}[state.type];$('zoomReadout').textContent=formatZoom();$('coordReadout').textContent=shortCoord(state.cx)+' / '+shortCoord(state.cy);$('coordsBtn').title='Edit exact center ('+state.digits+' decimal places)';$('precisionReadout').textContent=studio?'Float64':state.digits+' dp';
   const names={aurora:'Aurora',ember:'Ember',ocean:'Ocean',moss:'Moss',mono:'Silver'};$('paletteName').textContent=names[state.palette];document.querySelectorAll('[data-palette]').forEach(b=>{b.classList.toggle('active',b.dataset.palette===state.palette);b.setAttribute('aria-pressed',b.dataset.palette===state.palette);});$('savedCount').textContent=saved.length;document.querySelectorAll('input[type=range]').forEach(el=>el.style.setProperty('--fill',((Number(el.value)-Number(el.min))/(Number(el.max)-Number(el.min))*100)+'%'));document.querySelectorAll('[data-preset]').forEach(el=>el.classList.toggle('is-current',presets[el.dataset.preset].type===state.type));
 }
 function currentIterations(){return state.auto?Math.max(state.iterations,Math.min(20000,Math.round((600+Math.max(0,zoomLog(state)-2)*170)/100)*100)):state.iterations;}
@@ -132,13 +161,14 @@ function render(key){
 function zoom(factor,x=.5,y=.5){
   cancelSelection();
   ensurePrecision(state);const old=BigInt(state.span),next=old*BigInt(Math.round(factor*1e8))/100000000n,rect=canvas.getBoundingClientRect();
-  if(next<=0n){ensurePrecision(state);return;}
+  if(next<minimumSpan(state)){if(state.type==='studio')toast('Zoom limit reached for this formula.');return;}
   const ox=BigInt(Math.round((x-.5)*1e9)),oy=BigInt(Math.round((y-.5)*rect.height/rect.width*1e9));state.cx=(BigInt(state.cx)+(old-next)*ox/1000000000n).toString();state.cy=(BigInt(state.cy)+(old-next)*oy/1000000000n).toString();state.span=next.toString();ensurePrecision(state);schedule(100);
 }
 function panReuse(rect,cx,cy,span){
   const source=lastReadyFrame;
   if(!source||source.step!==1||source.field?.length!==source.width*source.height||source.iterations!==currentIterations())return null;
   if(!['type','digits','span','jr','ji'].every(key=>source.view[key]===state[key]))return null;
+  if(state.type==='studio'&&JSON.stringify(source.view.recipe)!==JSON.stringify(state.recipe))return null;
   const plan=rasterFor(rect);
   if(plan.width!==source.width||plan.height!==source.height)return null;
   const width=BigInt(plan.width),anchorX=BigInt(source.grid.cx),anchorY=BigInt(source.grid.cy);
@@ -180,13 +210,38 @@ canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.button!==1)return;e
 canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const previous=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size!==1)return;if(dragAction==='select')updateSelection(e);else if(dragAction==='pan')pan(e.clientX-previous.x,e.clientY-previous.y,true);});
 canvas.addEventListener('pointerup',e=>{if(!pointers.has(e.pointerId))return;let next=null;if(pointers.size===1&&selection&&dragAction==='select'){updateSelection(e);const r=canvas.getBoundingClientRect();next=selectedView(state,selectionBounds(selection.start,selection.end,r.width,r.height),r.width,r.height);}pointers.delete(e.pointerId);cancelSelection();if(next){snipHistory.push({...state});if(snipHistory.length>30)snipHistory.shift();state=next;$('undoSnip').disabled=false;schedule(0);}});
 for(const event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,e=>{if(!pointers.has(e.pointerId))return;pointers.delete(e.pointerId);cancelSelection();});
-$('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);$('resetBtn').onclick=()=>{const type=state.type;state=createState({type,cx:type==='mandelbrot'?'-.5':'0',cy:'0',span:type==='ship'?'4':'3.3',name:{mandelbrot:'The Mandelbrot set',julia:'Julia’s Garden',ship:'Burning Ship'}[type],palette:state.palette});state.name=type==='mandelbrot'?'The Mandelbrot set':state.name;sync();schedule();};
-$('fractal').onchange=e=>{const k={mandelbrot:'seahorse',julia:'julia',ship:'ship'}[e.target.value];loadPreset(k);};
+$('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);
+$('resetBtn').onclick=()=>{
+  cancelSelection();
+  const {type}=state;
+  if(type==='studio'){
+    const home=(Object.hasOwn(catalog,state.preset)?catalog[state.preset]:null)??studioHome(state.recipe);
+    state={...state,cx:parseDecimal(home.cx,state.digits).toString(),cy:parseDecimal(home.cy,state.digits).toString(),span:parseDecimal(home.span,state.digits).toString()};
+  }else state=createState({type,cx:type==='mandelbrot'?'-.5':'0',cy:'0',span:type==='ship'?'4':'3.3',name:{mandelbrot:'The Mandelbrot set',julia:'Julia’s Garden',ship:'Burning Ship'}[type],palette:state.palette});
+  schedule();
+};
+$('fractal').onchange=e=>{const k={mandelbrot:'seahorse',julia:'julia',ship:'ship'}[e.target.value];if(k)loadPreset(k);};
 $('iterations').oninput=e=>{state.iterations=Number(e.target.value);state.auto=false;schedule(140);};$('autoDetail').onchange=e=>{state.auto=e.target.checked;schedule();};
 for(const [id,key]of[['juliaRe','jr'],['juliaIm','ji']])$(id).oninput=e=>{state[key]=Number(e.target.value);state.name='Your Julia creation';schedule(120);};
 $('colorShift').oninput=e=>{state.shift=Number(e.target.value);recolorView();};document.querySelectorAll('[data-palette]').forEach(b=>b.onclick=()=>{state.palette=b.dataset.palette;recolorView();});document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>loadPreset(b.dataset.preset));
 function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),3500);}
-function openModal(title,body){$('modalTitle').textContent=title;$('modalBody').replaceChildren();if(typeof body==='string')$('modalBody').innerHTML=body;else $('modalBody').append(body);$('modal').showModal();}
+function openModal(title,body,dialogClass=''){$('modal').className=dialogClass;$('modalTitle').textContent=title;$('modalBody').replaceChildren();if(typeof body==='string')$('modalBody').innerHTML=body;else $('modalBody').append(body);$('modal').showModal();}
+mountPresetCatalog($('presetCatalog'),$('controls'),loadPreset);
+$('studioBtn').onclick=()=>openStudio(openModal,state,(recipe,keepFrame)=>{
+  const home=studioHome(recipe),next=createState({...home,recipe,palette:state.palette,name:recipe.mode==='lyapunov'?'Custom Lyapunov':'Custom sequence'});
+  if(state.type==='studio')Object.assign(next,{auto:state.auto,iterations:state.iterations});
+  if(keepFrame){
+    Object.assign(next,{digits:state.digits,cx:state.cx,cy:state.cy,span:state.span});
+    const min=minimumSpan(next);
+    if(BigInt(next.span)<min)next.span=min.toString();
+  }
+  next.shift=state.shift;
+  cancelSelection();
+  state=next;
+  $('modal').close();
+  canvas.focus({preventScroll:true});
+  schedule(0);
+});
 $('closeModal').onclick=()=>$('modal').close();$('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
 $('aboutBtn').onclick=()=>openModal('Controls',`<div class="modal-copy"><p>Close this dialog to use the explorer shortcuts.</p><dl class="help-grid"><dt>Zoom</dt><dd>In Select mode, draw a rectangle and release.</dd><dt>Pan</dt><dd>Press <kbd>H</kbd>, then drag. In Select mode, hold <kbd>Shift</kbd> while dragging.</dd><dt>Select</dt><dd><kbd>V</kbd></dd><dt>Cancel selection</dt><dd><kbd>Esc</kbd></dd><dt>Zoom + / −</dt><dd><kbd>+</kbd> <kbd>−</kbd> or double-click to zoom in</dd><dt>Move</dt><dd>Arrow keys</dd><dt>Reset</dt><dd><kbd>Home</kbd></dd></dl><div class="help-note">Views save automatically in the URL. Library saves stay in this browser. PNG exports use the canvas resolution. Deep zoom increases precision automatically; speed and visible detail depend on the iteration count and your device.</div></div>`);
 $('saveBtn').onclick=()=>{
@@ -202,7 +257,7 @@ $('shareBtn').onclick=async()=>{try{await navigator.clipboard.writeText(currentV
 $('fullscreenBtn').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('workspace').requestFullscreen();}catch{toast('Full screen is unavailable in this browser.');}};
 document.addEventListener('fullscreenchange',()=>{cancelSelection();paintFrame();});
 $('exportBtn').onclick=()=>{if(rendering){toast('The image is rendering. Export when it is ready.');return;}recolorCurrentFrame();canvas.toBlob(blob=>{if(!blob)return;const link=document.createElement('a'),url=URL.createObjectURL(blob);link.href=url;link.download='fractalia-'+state.type+'-'+new Date().toISOString().slice(0,10)+'.png';link.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('PNG exported.');},'image/png');};
-$('coordsBtn').onclick=()=>{const f=document.createElement('form');f.className='coord-form';for(const [k,label]of[['cx','Real part (Re)'],['cy','Imaginary part (Im)'],['span','Viewport width in the complex plane']]){const l=document.createElement('label');l.textContent=label;const i=document.createElement('input');i.id='coord-'+k;l.htmlFor=i.id;i.name=k;i.required=true;i.value=decimal(state[k],state.digits).replace(/0+$/,'').replace(/\.$/,'');i.autocomplete='off';i.spellcheck=false;f.append(l,i);}const b=document.createElement('button');b.className='button';b.textContent='Apply';f.append(b);f.onsubmit=e=>{e.preventDefault();try{const data=new FormData(f);let needed=state.digits;for(const v of data.values()){const m=v.match(/e-(\d+)/i);if(m)needed=Math.max(needed,Number(m[1])+30);needed=Math.max(needed,(v.split('.')[1]||'').split(/[eE]/)[0].length+20);}if(needed>100000)throw Error('The requested precision exceeds the resources of this session.');const next={...state,digits:needed,name:'Your coordinates'};for(const k of ['cx','cy','span'])next[k]=parseDecimal(data.get(k),needed).toString();if(BigInt(next.span)<=0n)throw Error('Viewport width must be positive.');if(Math.abs(numeric(next.cx,needed))>100||Math.abs(numeric(next.cy,needed))>100||numeric(next.span,needed)>1000)throw Error('Choose coordinates between −100 and 100, and a viewport width up to 1000.');state=ensurePrecision(next);sync();schedule();$('modal').close();}catch(error){toast(error.message);}};openModal('Coordinates',f);};
+$('coordsBtn').onclick=()=>{const f=document.createElement('form');f.className='coord-form';for(const [k,label]of[['cx','Real part (Re)'],['cy','Imaginary part (Im)'],['span','Viewport width in the complex plane']]){const l=document.createElement('label');l.textContent=label;const i=document.createElement('input');i.id='coord-'+k;l.htmlFor=i.id;i.name=k;i.required=true;i.value=decimal(state[k],state.digits).replace(/0+$/,'').replace(/\.$/,'');i.autocomplete='off';i.spellcheck=false;f.append(l,i);}const b=document.createElement('button');b.className='button';b.textContent='Apply';f.append(b);f.onsubmit=e=>{e.preventDefault();try{const data=new FormData(f);let needed=state.digits;for(const v of data.values()){const m=v.match(/e-(\d+)/i);if(m)needed=Math.max(needed,Number(m[1])+30);needed=Math.max(needed,(v.split('.')[1]||'').split(/[eE]/)[0].length+20);}if(needed>100000)throw Error('The requested precision exceeds the resources of this session.');const next={...state,digits:needed,name:'Your coordinates'};for(const k of ['cx','cy','span'])next[k]=parseDecimal(data.get(k),needed).toString();if(BigInt(next.span)<=0n)throw Error('Viewport width must be positive.');if(BigInt(next.span)<minimumSpan(next))throw Error('Minimum viewport width for custom formulas is 0.00000001.');if(Math.abs(numeric(next.cx,needed))>100||Math.abs(numeric(next.cy,needed))>100||numeric(next.span,needed)>1000)throw Error('Choose coordinates between −100 and 100, and a viewport width up to 1000.');state=ensurePrecision(next);sync();schedule();$('modal').close();}catch(error){toast(error.message);}};openModal('Coordinates',f);};
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||$('modal').open)return;
   if(e.target?.isContentEditable||e.target?.closest?.('input, select, textarea'))return;

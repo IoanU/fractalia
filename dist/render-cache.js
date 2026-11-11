@@ -1,6 +1,8 @@
 // Palette, phase, names and layout do not affect mathematical escape values.
 export function renderKey(state,iterations){
-  return JSON.stringify([state.type,state.digits,state.cx,state.cy,state.span,state.jr,state.ji,iterations]);
+  const key=[state.type,state.digits,state.cx,state.cy,state.span,state.jr,state.ji,iterations];
+  if(state.type==='studio')key.push(state.recipe);
+  return JSON.stringify(key);
 }
 
 // Cover the screen with either panel layout, before fullscreen is ever opened.
