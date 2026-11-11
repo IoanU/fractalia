@@ -1,0 +1,12 @@
+{
+  "name": "fractalia",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A browser-based fractal explorer with arbitrary-precision coordinates, region zoom, and cached recoloring.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node scripts/check.mjs"
+  }
+}
