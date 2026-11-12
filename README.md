@@ -17,4 +17,4 @@ Combine 24 formulas in a repeating sequence of up to eight steps. Each step can 
 
 **Shuffle** generates a combination and previews it before you apply it. Shared links and saved views include the formula settings.
 
-The original Mandelbrot, Julia, and Burning Ship modes increase coordinate precision as you zoom. Formula Studio uses floating-point rendering and supports zoom up to 330 million×. The Library stores saved views in the current browser.
+All formulas increase numerical precision as you zoom. Deep renders can reuse high-precision reference orbits for nearby pixels, including in custom Studio sequences. Where the faster calculation becomes uncertain, the renderer evaluates those pixels directly at higher precision. The Library stores saved views in the current browser.

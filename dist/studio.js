@@ -13,7 +13,8 @@ function drawPreview(canvas,preset,max) {
   for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
     field[y*width+x]=sample(cx+(x+.5-width/2)*span/width,cy+(y+.5-height/2)*span/width);
   }
-  canvas.getContext('2d').putImageData(new ImageData(colorize(field,max,preset.palette,preset.shift??0),width,height),0,0);
+  const pixels=colorize(field,max,preset.palette,preset.shift??0,preset.glowStart);
+  canvas.getContext('2d').putImageData(new ImageData(pixels,width,height),0,0);
 }
 
 export function mountPresetCatalog(container,scrollRoot,onChoose) {
@@ -88,7 +89,7 @@ export function openStudio(open,state,onApply) {
         <button type="submit" class="studio-apply">Apply</button>
       </div>
       ${shuffled?'<canvas class="shuffle-preview" width="192" height="112" aria-label="Shuffled fractal preview"></canvas>':''}
-      <p class="studio-note">The sequence loops on every orbit. Drift rotates c during iteration. Custom views have a zoom limit of 330 million×.</p>`;
+      <p class="studio-note">The sequence loops on every orbit. Drift rotates c during iteration.</p>`;
     if(shuffled)drawPreview(form.querySelector('.shuffle-preview'),{...studioHome(recipe),recipe,palette:state.palette,shift:state.shift},200);
   }
   function readForm() {

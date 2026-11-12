@@ -63,3 +63,33 @@ flush();
 assert.notEqual(workers.at(-1),panWorker);
 assert.equal(workers.at(-1).request.pan,undefined);
 console.log('Pan shows the previous image immediately, computes exposed strips, keeps a recolorable field, and falls back when there is no overlap.');
+
+// Resize between scheduling and starting a viewport render, before the
+// ResizeObserver callback has had a chance to run.
+elements.clear();jobs.clear();workers=[];
+rect={left:0,top:0,width:80,height:60};
+location.hash='#view='+btoa(JSON.stringify({
+  digits:40,cx:'0',cy:'0',span:'10000000000000000000000000000',type:'studio',
+  palette:'aurora',jr:0,ji:0,shift:0,iterations:200,auto:false,name:'Viewport test',
+  recipe:{steps:[{formula:'z3'}]}
+}));
+await import('./dist/app.js?viewport-test');
+rect={...rect,width:60};
+flush();
+assert.deepEqual(workers.map(worker=>worker.request.width),[60]);
+const deepWorker=workers[0];
+for(const [step,progress] of [[12,40],[4,80]]){
+  deepWorker.onmessage({data:{id:deepWorker.request.id,width:1,height:1,values:new Float64Array([5]),step,done:false,deep:true,progress}});
+  assert.equal(elements.get('progress').style.width,progress+'%');
+}
+finishField(deepWorker,60,60,3600);
+assert.equal(elements.get('progress').style.width,'0');
+resize();flush();
+assert.equal(workers.length,1);
+rect={...rect,width:80};resize();flush();
+assert.deepEqual(workers.map(worker=>worker.request.width),[60,80]);
+finishField(workers[1],80,60,4800);
+rect={...rect,width:60};resize();flush();
+assert.equal(workers.length,2);
+assert.equal(elements.get('fractalCanvas').dataset.renderSource,'cache');
+console.log('Viewport cache uses the actual render size, and both deep preview passes advance progress.');

@@ -36,6 +36,21 @@ export function panOverlap(width,height,dx,dy){
   };
 }
 
+// In raster order. Every middle row exposes at most one side of the view.
+export function panStrips(width,height,dx,dy){
+  const {left,right,top,bottom}=panOverlap(width,height,dx,dy);
+  const side=width-(right-left);
+  return [
+    {x:0,y:0,width,height:top},
+    {x:dx<0?0:right,y:top,width:side,height:bottom-top},
+    {x:0,y:bottom,width,height:height-bottom}
+  ].filter(strip=>strip.width&&strip.height);
+}
+
+export function firstLaneRow(y,lane,lanes){
+  return y+(lane-y%lanes+lanes)%lanes;
+}
+
 // The worker sends only samples outside the overlap, in raster order.
 export function mergePanField(source,width,height,dx,dy,exposed){
   const {left,right,top,bottom}=panOverlap(width,height,dx,dy);

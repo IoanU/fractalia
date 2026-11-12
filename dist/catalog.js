@@ -5,7 +5,8 @@ const julia = (formula,re,im,options) => step(formula,{julia:true,re,im,...optio
 const drift = (formula,re,im,amplitude,period) => julia(formula,re,im,{drift:true,amplitude,period});
 const preset = (name, group, steps, options={}) => ({
   name, group, type:'studio', cx:options.cx??'0', cy:options.cy??'0',
-  span:options.span??'3.8', palette:options.palette??'aurora',
+  span:options.span??'3.8', palette:options.palette??'aurora', shift:options.shift??0,
+  glowStart:options.glowStart,
   recipe:normalizeRecipe({...options,steps})
 });
 
@@ -16,7 +17,7 @@ export const catalog = {
   multibrot6:preset('Multibrot z⁶','Powers',[step('z6')]),
   multibrot7:preset('Multibrot z⁷','Powers',[step('z7')],{palette:'ember'}),
   dendrite:preset('Julia Dendrite','Powers',[julia('z2',0,1)],{palette:'ocean'}),
-  snowflake:preset('Julia Snowflake','Powers',[julia('z5',-.36,.28)],{palette:'ocean'}),
+  snowflake:preset('Julia Snowflake','Powers',[julia('z5',-.36,.28)],{span:'4.2',palette:'ocean',shift:165,glowStart:.4}),
   tricorn:preset('Tricorn','Folds & mirrors',[step('tricorn')],{cx:'-.3'}),
   multicorn3:preset('Multicorn z³','Folds & mirrors',[step('multi3')],{palette:'ember'}),
   multicorn4:preset('Multicorn z⁴','Folds & mirrors',[step('multi4')],{palette:'ocean'}),
@@ -42,10 +43,10 @@ export const catalog = {
   driftJulia:preset('Drift Julia','Drift',[drift('z2',-.745,.186,.045,16)],{palette:'ocean'}),
   driftSeahorse:preset('Drift Seahorse','Drift',[drift('z2',-.7453,.1127,.025,14)],{palette:'ember'}),
   driftTricorn:preset('Drift Tricorn','Drift',[drift('tricorn',-.25,.58,.09,18)],{palette:'moss'}),
-  driftCubic:preset('Drift Cubic','Drift',[drift('z3',-.23,.55,.12,15)]),
+  driftCubic:preset('Drift Cubic','Drift',[drift('z3',-.23,.55,.12,15)],{cy:'.12',span:'4.15',shift:143,glowStart:.8}),
   driftDendrite:preset('Drift Dendrite','Drift',[drift('z2',0,1,.08,20)],{palette:'moss'}),
-  driftSnowflake:preset('Drift Snowflake','Drift',[drift('z5',-.36,.28,.15,19)],{palette:'ocean'}),
-  driftHeart:preset('Drift Heart','Drift',[drift('heart',-.45,.35,.07,12)],{palette:'ember'}),
+  driftSnowflake:preset('Drift Snowflake','Drift',[drift('z5',-.36,.28,.15,19)],{span:'4.2',palette:'ocean',shift:210,glowStart:.4}),
+  driftHeart:preset('Drift Heart','Drift',[drift('heart',-.45,.35,.07,12)],{cy:'-.42',span:'3',palette:'ember',shift:160,glowStart:3.7}),
   driftPhoenix:preset('Drift Phoenix','Drift',[drift('phoenix',.5667,0,.045,20)]),
   driftFractaloid:preset('Drift Fractaloid','Drift',[drift('z3',-.23,.53,.08,13),julia('tricorn',-.2,.3)],{palette:'ocean'}),
   driftSingularity:preset('Drift Singularity','Drift',[drift('warp',-.55,.3,.14,21),julia('celtic',-.21,.37)],{palette:'ember'}),
@@ -55,7 +56,7 @@ export const catalog = {
   nova:preset('Nova','Convergence',[step('nova')],{span:'4.5',palette:'ocean'}),
   novaJelly:preset('Nova Jellyfish','Convergence',[julia('nova',-.06,.32)],{palette:'ember'}),
   magnet:preset('Magnet','Convergence',[step('magnet')],{cx:'1.5',span:'6',palette:'ocean'}),
-  exponential:preset('Exponential Julia','Chaos',[julia('exp',-1.5,.35)],{cx:'-1',span:'8',palette:'ember'}),
+  exponential:preset('Exponential Julia','Chaos',[julia('exp',-1.5,.35)],{cx:'2.4',span:'5.2',palette:'ember',shift:195,glowStart:-1.6}),
   sine:preset('Sine Julia','Chaos',[julia('sine',.12,.62)],{span:'8',palette:'moss'}),
   lyapunov:preset('Lyapunov','Chaos',[],{mode:'lyapunov',cx:'3.35',cy:'3.35',span:'1.4',palette:'ember'}),
   lyapunovBraid:preset('Lyapunov Braid','Chaos',[],{mode:'lyapunov',sequence:'ABBABAAB',cx:'3.4',cy:'3.4',span:'1.4',palette:'ocean'})

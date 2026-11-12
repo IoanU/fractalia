@@ -1,4 +1,4 @@
-import {parseDecimal} from './math.js';
+import {escapeFloat} from './math.js';
 
 export const formulas = {
   z2:'z²', z3:'z³', z4:'z⁴', z5:'z⁵', z6:'z⁶', z7:'z⁷',
@@ -36,12 +36,53 @@ export function normalizeRecipe(recipe) {
   };
 }
 
-export function minimumSpan(state) {
-  return state.type==='studio' ? parseDecimal('1e-8',state.digits) : 1n;
+export const powers = {z3:3,z4:4,z5:5,z6:6,z7:7,multi3:3,multi4:4,multi5:5};
+export const boundedColor = (distance,max) => Math.min(max-.001,Math.max(0,-Math.log2(distance+1e-12)*6));
+export const lyapunovColor = (exponent,max) => exponent>=0 ? 34+Math.min(14,exponent*22) : boundedColor(-exponent,max);
+
+export function recipeSeed(recipe) {
+  const first=recipe.steps[0];
+  const pixel=recipe.seed==='pixel'||(recipe.seed==='auto'&&(first.julia||first.formula==='newton'));
+  const critical=recipe.seed==='critical'||(recipe.seed==='auto'&&['lambda','nova','cubic'].includes(first.formula));
+  return {pixel,critical,dual:recipe.steps.length===1&&first.formula==='cubic'&&critical&&!pixel};
 }
 
-const powers = {z3:3,z4:4,z5:5,z6:6,z7:7,multi3:3,multi4:4,multi5:5};
-const boundedColor = (distance,max) => Math.min(max-.001,Math.max(0,-Math.log2(distance+1e-12)*6));
+export function classicRecipe(recipe) {
+  if(recipe.mode!=='orbit'||recipe.steps.length!==1||recipe.coloring!=='escape')return null;
+  const step=recipe.steps[0];
+  if(step.drift)return null;
+  const {pixel,critical}=recipeSeed(recipe);
+  if(step.formula==='z2'&&step.julia&&pixel)return {type:'julia',jr:step.re,ji:step.im};
+  if(!step.julia&&!pixel&&!critical){
+    if(step.formula==='z2')return {type:'mandelbrot',jr:0,ji:0};
+    if(step.formula==='ship')return {type:'ship',jr:0,ji:0};
+  }
+  return null;
+}
+
+function quadraticTrap(recipe,max,pixelSeed,criticalSeed){
+  const step=recipe.steps[0],trap=recipe.trap,ring=recipe.coloring==='ring';
+  return (px,py)=>{
+    const re=step.julia?step.re:px,im=step.julia?step.im:py;
+    let x=pixelSeed?px:criticalSeed?1:0,y=pixelSeed?py:0;
+    let nearest=Infinity,lowSquare=0,highSquare=Infinity;
+    for(let n=0;n<max;n++){
+      const next=x*x-y*y+re;
+      y=2*x*y+im;x=next;
+      const magnitude=x*x+y*y;
+      if(ring){
+        if(magnitude>=lowSquare&&magnitude<=highSquare){
+          // Use the same distance as the generic path for cached recoloring.
+          nearest=Math.min(nearest,Math.abs(Math.hypot(x,y)-trap));
+          lowSquare=Math.max(0,trap-nearest)**2;
+          highSquare=(trap+nearest)**2;
+        }
+      }else nearest=Math.min(nearest,Math.abs(x-trap),Math.abs(y-trap));
+      if(!(magnitude<=256))break;
+    }
+    return boundedColor(nearest,max);
+  };
+}
 
 export function compileRecipe(config, max) {
   const recipe = normalizeRecipe(config);
@@ -49,16 +90,24 @@ export function compileRecipe(config, max) {
     const sequence = [...recipe.sequence].map(letter => letter==='A');
     return (a,b) => {
       if(a<0||a>4||b<0||b>4)return max;
-      let x=.5,total=0;
+      let x=.5,total=0,product=1;
       for(let n=0;n<max+24;n++) {
         const r=sequence[n%sequence.length] ? a : b;
-        if(n>=24)total+=Math.log(Math.max(1e-15,Math.abs(r*(1-2*x))));
+        if(n>=24){
+          product*=Math.max(1e-15,Math.abs(r*(1-2*x)));
+          if((n&15)===7){total+=Math.log(product);product=1;}
+        }
         x=r*x*(1-x);
       }
-      const exponent=total/max;
-      return exponent>=0 ? 34+Math.min(14,exponent*22) : boundedColor(-exponent,max);
+      return lyapunovColor((total+Math.log(product))/max,max);
     };
   }
+
+  const classic=classicRecipe(recipe);
+  if(classic)return (x,y)=>escapeFloat(x,y,max,classic.type,classic.jr,classic.ji);
+  const {pixel:pixelSeed,critical:criticalSeed,dual:dualSeed}=recipeSeed(recipe);
+  if(recipe.steps.length===1&&recipe.steps[0].formula==='z2'
+    &&!recipe.steps[0].drift&&recipe.coloring!=='escape')return quadraticTrap(recipe,max,pixelSeed,criticalSeed);
 
   const steps = recipe.steps.map(step => ({
     ...step,
@@ -69,10 +118,7 @@ export function compileRecipe(config, max) {
     }) : null
   }));
   const first=steps[0];
-  const pixelSeed=recipe.seed==='pixel'||(recipe.seed==='auto'&&(first.julia||first.formula==='newton'));
-  const criticalSeed=recipe.seed==='critical'||(recipe.seed==='auto'&&['lambda','nova','cubic'].includes(first.formula));
   const critical=first.formula==='lambda' ? .5 : first.formula==='cubic' ? Math.sqrt(.3) : 1;
-  const dualSeed=steps.length===1&&first.formula==='cubic'&&criticalSeed&&!pixelSeed;
   const trap=recipe.coloring;
   function orbit(px,py,seed) {
     let x=pixelSeed?px:seed,y=pixelSeed?py:0;
