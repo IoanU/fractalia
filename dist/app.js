@@ -193,7 +193,13 @@ function render(key){
   const cores=window.navigator?.hardwareConcurrency||1;
   const strips=reuse?panStrips(plan.width,plan.height,reuse.dx,reuse.dy):null;
   const samples=strips?strips.reduce((total,strip)=>total+strip.width*strip.height,0):plan.width*plan.height;
-  const parallelThreshold=reuse?(snapshot.type==='studio'||zoomLog(snapshot)>10?20000:80000):400000;
+  const depth=zoomLog(snapshot);
+  const costlyStudio=snapshot.type==='studio'&&depth>11&&(snapshot.recipe.mode==='lyapunov'||
+    snapshot.recipe.coloring==='ring'||snapshot.recipe.steps.some(({formula})=>
+      ['warp','sine','exp','newton','nova','magnet','cubic','phoenix'].includes(formula)));
+  let parallelThreshold=400000;
+  if(reuse)parallelThreshold=snapshot.type==='studio'||depth>10?20000:80000;
+  else if(costlyStudio)parallelThreshold=20000;
   const lanes=samples<parallelThreshold?1:Math.min(4,Math.max(1,cores-1));
   const passes=new Map();
   canvas.dataset.renderCount=String(++renderCount);canvas.dataset.renderWidth=String(plan.width);canvas.dataset.renderHeight=String(plan.height);canvas.dataset.renderSource='worker';

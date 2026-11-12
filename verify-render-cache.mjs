@@ -113,3 +113,17 @@ rect={...rect,width:60};resize();flush();
 assert.equal(workers.length,2);
 assert.equal(elements.get('fractalCanvas').dataset.renderSource,'cache');
 console.log('Viewport cache uses the actual render size, and both deep preview passes advance progress.');
+
+// A costly deep recipe uses multiple lanes even in a smaller viewport.
+elements.clear();jobs.clear();workers=[];
+rect={left:0,top:0,width:320,height:200};
+window.screen={width:320,height:200};
+window.navigator={hardwareConcurrency:8};
+const warpView=JSON.parse(atob(location.hash.slice('#view='.length)));
+warpView.recipe={steps:[{formula:'z3'},{formula:'warp',repeat:3}]};
+location.hash='#view='+btoa(JSON.stringify(warpView));
+await import('./dist/app.js?parallel-deep-warp');
+flush();
+assert.deepEqual(workers.map(worker=>worker.request.lane),[0,1,2,3]);
+for(const worker of workers)finishField(worker,320,200,320*50);
+assert.equal(lastPixels.length,320*200*4);

@@ -146,6 +146,39 @@ function linearPrefix(reference,radius,pixel,memory,fixedError){
   }
 }
 
+function phoenixErrorBound(memory){
+  const memoryGain=Math.abs(memory);
+  let remaining=0,startError,startPreviousError;
+  let ar,ai,br,bi,previousAr,previousAi,previousBr,previousBi;
+  let noise,previousNoise;
+  return (re,im,factor,margin,error,previousError,addedError,consecutive)=>{
+    if(!consecutive||!remaining){
+      remaining=8;
+      startError=error;startPreviousError=previousError;
+      ar=1;ai=0;br=0;bi=0;
+      previousAr=0;previousAi=0;previousBr=1;previousBi=0;
+      noise=0;previousNoise=0;
+    }
+    // Compose the two-state linear recurrence over a short block. Take its
+    // norm after composition, so opposing contributions can still cancel.
+    const nextAr=2*(re*ar-im*ai)+memory*previousAr;
+    const nextAi=2*(re*ai+im*ar)+memory*previousAi;
+    const nextBr=2*(re*br-im*bi)+memory*previousBr;
+    const nextBi=2*(re*bi+im*br)+memory*previousBi;
+    const linear=Math.sqrt(nextAr*nextAr+nextAi*nextAi)*startError+
+      Math.sqrt(nextBr*nextBr+nextBi*nextBi)*startPreviousError;
+    const scale=(Math.abs(ar)+Math.abs(ai))*startError+(Math.abs(br)+Math.abs(bi))*startPreviousError;
+    const previousScale=(Math.abs(previousAr)+Math.abs(previousAi))*startError+
+      (Math.abs(previousBr)+Math.abs(previousBi))*startPreviousError;
+    const nextNoise=(factor+margin)*noise+memoryGain*previousNoise+error**2+addedError+
+      margin*(scale+memoryGain*previousScale+linear);
+    previousAr=ar;previousAi=ai;previousBr=br;previousBi=bi;
+    ar=nextAr;ai=nextAi;br=nextBr;bi=nextBi;
+    previousNoise=noise;noise=nextNoise;remaining--;
+    return linear+noise;
+  };
+}
+
 function orbitPerturbation(recipe,max,precision){
   const {pixel,dual}=recipeSeed(recipe);
   const steps=recipe.steps.map(prepareStep);
@@ -154,6 +187,7 @@ function orbitPerturbation(recipe,max,precision){
   const {coloring,memory,trap}=recipe;
   const trackTrap=coloring!=='escape',ring=coloring==='ring';
   const hasMemory=steps.some(step=>step.formula==='phoenix');
+  const memoryGain=Math.abs(memory);
   const canSkip=!trackTrap&&!steps.some(step=>step.rational);
   const fixedError=2**(30-precision);
 
@@ -170,6 +204,8 @@ function orbitPerturbation(recipe,max,precision){
     const parameterError=roundoff*parameterDelta+fixedError;
     let dx=pixel?cr:0,dy=pixel?ci:0,error=pixel?parameterError:0;
     let previousX=0,previousY=0,previousError=0;
+    const phoenixBound=hasMemory?phoenixErrorBound(memory):null;
+    let priorPhoenix=false;
     let start=0;
     if(prefix){
       const re=cr/prefix.radius,im=ci/prefix.radius;
@@ -197,7 +233,7 @@ function orbitPerturbation(recipe,max,precision){
       const squareGain=ref.radius+extent;
       const squareRe=x*(2*a+x)-y*(2*b+y),squareIm=x*(2*b+y)+y*(2*a+x);
       let u=squareRe,v=squareIm,addParameter=true;
-      let gain=power===2?2*extent:power*extent**(power-1),parameterGain=1,extraError=0;
+      let gain=power===2?2*extent:power*extent**(power-1),parameterGain=1,parameterRounding=1,extraError=0;
       let roundingGain=1+gain;
       for(let p=0;p<ref.realPowers.length;p++){
         // (Z + d)^k - Z^k = (Z + d) * ((Z + d)^(k-1) - Z^(k-1)) + d * Z^(k-1).
@@ -209,10 +245,16 @@ function orbitPerturbation(recipe,max,precision){
         u=foldDelta(ref.zr,u);
         if(formula==='buffalo')v=-foldDelta(ref.zi,v);
       }else if(formula==='cubic'){
-        u-=.9*x;v-=.9*y;gain+=.9;
+        u-=.9*x;v-=.9*y;
+        const re=a+x,im=b+y,radius=Math.hypot(re,im);
+        // Keep the cancellation in 3z² - .9, and bound the quadratic remainder.
+        gain=Math.hypot(3*(re*re-im*im)-.9,6*re*im)+(3*radius+error)*error+roundoff*(1+6*extent**2);
+        roundingGain+=.9;
       }else if(formula==='phoenix'){
         u+=memory*previousX;v+=memory*previousY;
-        extraError+=Math.abs(memory)*(previousError+roundoff*(Math.abs(previousX)+Math.abs(previousY)));
+        const re=a+x,im=b+y;
+        gain=2*Math.sqrt(re*re+im*im)+error+roundoff*(1+2*extent);
+        extraError+=memoryGain*roundoff*(Math.abs(previousX)+Math.abs(previousY));
       }else if(formula==='warp'){
         u+=ref.gr*Math.sin(3*x)-2*ref.fr*Math.sin(1.5*x)**2;
         v+=ref.gi*Math.sin(3*y)-2*ref.fi*Math.sin(1.5*y)**2;
@@ -224,10 +266,10 @@ function orbitPerturbation(recipe,max,precision){
         parameterGain=ref.base+(1+squareGain)*input;
         gain=(ref.parameter+cDelta+cError)*(1+gain);
         roundingGain+=gain+parameterGain;
+        parameterRounding=parameterGain;
         extraError+=roundoff*cDelta*(ref.radius+ref.radius**2);
         addParameter=false;
       }else if(formula==='sine'||formula==='exp'){
-        if(input>.5)return NaN;
         if(formula==='sine'){
           const sine=Math.sin(x),cosh=Math.cosh(y),sinh=Math.sinh(y);
           const sr=sine*cosh,si=Math.cos(x)*sinh;
@@ -236,13 +278,20 @@ function orbitPerturbation(recipe,max,precision){
           u=ref.gr*sr-ref.gi*si+ref.fr*cm-ref.fi*cs;
           v=ref.gr*si+ref.gi*sr+ref.fr*cs+ref.fi*cm;
           gain=ref.derivative+Math.cosh(Math.abs(b)+input)*input;
+          roundingGain+=gain;
+          if(input>=.125){
+            const margin=roundoff*(1+Math.abs(a)+Math.abs(b)+delta);
+            const imag=Math.abs(b+y)+margin;
+            gain=Math.min(gain,Math.hypot(Math.cos(a+x),Math.sinh(imag))+(error+margin)*Math.cosh(imag+error));
+          }
         }else{
           const magnitude=Math.exp(x),sine=Math.sin(y/2);
           const er=Math.expm1(x)-2*magnitude*sine*sine,ei=magnitude*Math.sin(y);
           u=ref.fr*er-ref.fi*ei;v=ref.fr*ei+ref.fi*er;
           gain=ref.base*Math.exp(input);
+          roundingGain+=gain;
+          if(input>=.125)gain=Math.min(gain,Math.exp(a+x+error+roundoff*(1+Math.abs(a)+Math.abs(x))));
         }
-        roundingGain+=gain;
       }else if(step.rational){
         const magnet=formula==='magnet';
         const denominatorSpread=magnet?2*input+cDelta+cError:squareGain*input;
@@ -264,12 +313,38 @@ function orbitPerturbation(recipe,max,precision){
           gain=(2+quotient*2*extent/denominator)/3;
         }
         roundingGain+=(1+gain+parameterGain)*(1+(ref.radius**2+ref.parameter+1)/denominator);
+        parameterRounding=parameterGain;
+        // Propagate uncertainty around the reconstructed pixel, where the
+        // derivatives can cancel. The larger reference disk still bounds rounding.
+        const zr=a+x,zi=b+y,z=Math.hypot(zr,zi);
+        const qRe=ref.qr+qr,qIm=ref.qi+qi,q=Math.hypot(qRe,qIm);
+        const margin=roundoff*(1+z+quotient)*(1+(ref.radius**2+ref.parameter+1)/denominator);
+        const localDenominator=Math.hypot(re,im)-(magnet?2*error+cError:(2*z+error)*error)-margin;
+        if(localDenominator>1e-12){
+          const separation=Math.hypot(zr-qRe,zi-qIm)+margin;
+          if(magnet){
+            const dz=(2*separation+error)/localDenominator;
+            const dc=(Math.hypot(1-qRe,qIm)+margin)/localDenominator;
+            const factor=2*(q+margin)+dz*error+dc*cError;
+            gain=Math.min(gain,factor*dz);
+            parameterGain=Math.min(parameterGain,factor*dc);
+          }else{
+            const localGain=(2*(z+margin)*separation+(4*z+q+5*margin+2*error)*error)/(3*localDenominator);
+            gain=Math.min(gain,localGain);
+          }
+        }
         addParameter=formula==='nova';
       }
       if(addParameter){u+=dr;v+=di;}
-      const nextError=gain*error+parameterGain*cError+extraError
-        +roundoff*(roundingGain*delta+(1+parameterGain)*cDelta+Math.abs(u)+Math.abs(v))+fixedError*(1+roundingGain);
-      if(!(nextError<=1e-5))return NaN;
+      const noise=parameterGain*cError+extraError
+        +roundoff*(roundingGain*delta+(1+parameterRounding)*cDelta+Math.abs(u)+Math.abs(v))+fixedError*(1+roundingGain);
+      let nextError=gain*error+noise;
+      if(formula==='phoenix'){
+        nextError+=memoryGain*previousError;
+        const margin=roundoff*(1+2*extent);
+        nextError=Math.min(nextError,phoenixBound(a+x,b+y,gain-error,margin,error,previousError,noise,priorPhoenix));
+      }
+      if(!(nextError<=(step.rational ? .001 : 1e-5)))return NaN;
       const nextX=ref.nextX+u,nextY=ref.nextY+v;
       const radius=Math.sqrt(nextX*nextX+nextY*nextY);
       const spread=nextError+roundoff*(1+ref.nextRadius+radius);
@@ -303,7 +378,7 @@ function orbitPerturbation(recipe,max,precision){
         const high=n+1-Math.log(Math.log2(radius-spread))/step.logPower;
         return high-low<=tolerance?(low+high)/2:NaN;
       }
-      if(hasMemory){previousX=dx;previousY=dy;previousError=error;}
+      if(hasMemory){previousX=dx;previousY=dy;previousError=error;priorPhoenix=formula==='phoenix';}
       dx=u;dy=v;error=nextError;
     }
     return reference.length===max?(trackTrap?trapColor():max):NaN;
@@ -362,15 +437,18 @@ export function studioPerturbation({recipe,precision,max,pixelScale,point,evalua
   const cache=new Map();
   const limit=Math.max(5,Math.min(128,Math.floor(8*1024*1024/(384*(max+24)*(kernel.dual?2:1)))));
   const patience=recipe.mode==='lyapunov'?8:64;
+  // One large tile can use up to 16 smaller and four shifted references.
+  const refineReference=limit>=21&&recipe.mode==='orbit'&&recipe.steps.some(({formula})=>
+    ['sine','exp','nova','newton','magnet','phoenix','cubic'].includes(formula));
 
-  function getReference(px,py,shift){
-    const x0=Math.floor((px-shift)/studioTileSize)*studioTileSize+studioTileSize/2+shift;
-    const y0=Math.floor((py-shift)/studioTileSize)*studioTileSize+studioTileSize/2+shift;
-    const key=x0+':'+y0;
+  function getReference(px,py,shift,size=studioTileSize){
+    const x0=Math.floor((px-shift)/size)*size+size/2+shift;
+    const y0=Math.floor((py-shift)/size)*size+size/2+shift;
+    const key=x0+':'+y0+':'+size;
     let entry=cache.get(key);
     if(!entry){
       const [x,y]=point(x0,y0);
-      const radius=studioTileSize*pixelScale;
+      const radius=size*pixelScale;
       entry={x0,y0,failures:0,skip:0,
         primary:kernel.trace(run,x,y,false,radius),secondary:kernel.dual?kernel.trace(run,x,y,true,radius):null};
       if(cache.size>=limit)cache.delete(cache.keys().next().value);
@@ -390,6 +468,7 @@ export function studioPerturbation({recipe,precision,max,pixelScale,point,evalua
     if(reference.skip>0){reference.skip--;return exact(x,y);}
     let value=sample(reference,x,y);
     if(!Number.isFinite(value))value=sample(getReference(x,y,studioTileSize/2),x,y);
+    if(refineReference&&!Number.isFinite(value))value=sample(getReference(x,y,0,studioTileSize/4),x,y);
     if(Number.isFinite(value)){reference.failures=0;return value;}
     // Let sustained instability use the direct evaluator, then try again
     // as the renderer moves across the tile.

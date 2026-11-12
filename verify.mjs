@@ -3,15 +3,53 @@ import {colorize} from './dist/colorize.js';
 import {parseDecimal,decimal,numeric,zoomLog,ensurePrecision,escapeFloat} from './dist/math.js';
 import {firstLaneRow,mergePanField,panStrips,renderKey} from './dist/render-cache.js';
 import {catalog,shuffleRecipe,studioHome} from './dist/catalog.js';
-import {compileRecipe,normalizeRecipe} from './dist/formulas.js';
+import {boundedColor,compileRecipe,normalizeRecipe} from './dist/formulas.js';
 import {compileBoundedRecipe} from './dist/orbit-bounds.js';
 import {preciseRecipe} from './dist/precise-formulas.js';
+import {absBig,fixedPoint} from './dist/fixed-point.js';
 assert.equal(parseDecimal('-7.45e-3',40),-745n*10n**35n);
 assert.equal(decimal(parseDecimal('-0.7453',40),40),'-0.7453000000000000000000000000000000000000');
 assert.equal(numeric(parseDecimal('1e-350',380),380),0);
 assert.equal(escapeFloat(0,0,500,'mandelbrot',0,0),500);
 assert.equal(escapeFloat(-1,0,500,'mandelbrot',0,0),500);
 assert(escapeFloat(2,2,500,'mandelbrot',0,0)<10);
+
+// Check the residual polynomial, signed range reduction and sine-only path
+// at a precision where Float64 could conceal a loss of significant bits.
+{
+  const {one,sin,sinCos}=fixedPoint(224);
+  const encode=value=>parseDecimal(value,79)*one/10n**79n;
+  const halfPi=encode('1.5707963267948966192313216916397514420985846996875529104874722961539082031431045');
+  const s=encode('.8414709848078965066525023216302989996225630607983710656727517099919104043912397');
+  const c=encode('.5403023058681397174009366074429766037323104206179222276700972553811003947744718');
+  for(const [angle,expectedSin,expectedCos] of [
+    [one,s,c],[-one,-s,c],[one+halfPi,c,-s],[one-halfPi,-c,s],
+    [one+2n*halfPi,-s,-c],[one+4n*halfPi,s,c],[halfPi+1n,one,0n]
+  ]){
+    const [s,c]=sinCos(angle);
+    assert.equal(sin(angle),s);
+    assert(absBig(s-expectedSin)<256n);
+    assert(absBig(c-expectedCos)<256n);
+  }
+}
+{
+  const {one,exp}=fixedPoint(224);
+  const encode=value=>parseDecimal(value,79)*one/10n**79n;
+  const e=encode('2.7182818284590452353602874713526624977572470936999595749669676277240766303535476');
+  const inverse=encode('.3678794411714423215955237701614608674458111310317678345078368016974614957448998');
+  const ln2=encode('.6931471805599453094172321214581765680755001343602552541206800094933936219696947');
+  for(const [argument,expected] of [[one,e],[-one,inverse],[ln2,2n*one],[-ln2,one/2n],[0n,one]]){
+    assert(absBig(exp(argument)-expected)<=2n);
+  }
+  assert.equal(exp(-225n*one),0n);
+  assert.equal(exp(-224n*ln2),1n);
+
+  // The orbit starts at .5 and visits .25, .0625 and successively smaller radii.
+  for(const [trap,closest] of [[.1,.0625],[.21,.25]]){
+    const orbit=preciseRecipe({steps:[{formula:'z2',julia:true,re:0,im:0}],coloring:'ring',trap},60,224);
+    assert(Math.abs(orbit(one/2n,0n)-boundedColor(Math.abs(closest-trap),60))<1e-10);
+  }
+}
 let s={digits:40,cx:parseDecimal('-.743643887037151',40).toString(),cy:parseDecimal('.13182590420533',40).toString(),span:parseDecimal('.012',40).toString()};
 for(let i=0;i<1600;i++){ensurePrecision(s);s.span=(BigInt(s.span)/2n).toString();ensurePrecision(s);}
 assert(BigInt(s.span)>0n);assert(s.digits>480);assert(zoomLog(s)>480);

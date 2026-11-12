@@ -55,6 +55,11 @@ check(powers,'1','0',100,400,true);
 check(folds,'1','0',18,200,true);
 check(normalizeRecipe({steps:[{formula:'ship'}]}),'-2','0',18,200,true);
 check(mixed,'-1.5','.3',18,120);
+check(normalizeRecipe({steps:[{formula:'sine'}]}),'1.4193410609676191','-1.2',11,200);
+check(catalog.nova.recipe,'-.1391776081709623','.42500000000000004',11,200);
+check(catalog.magnet.recipe,'1.308593788665743','-.8333333333333334',11,200);
+check(catalog.cubic.recipe,'-.05709794595435288','-.3588888888888889',11,200,true);
+check(catalog.driftPhoenix.recipe,'.21412351227185467','-.9500000000000001',11,200);
 
 // Exercise a post-squaring fold whose exact real part is too small to
 // reconstruct by subtracting two rounded Float64 squares.
