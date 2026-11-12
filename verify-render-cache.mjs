@@ -6,8 +6,8 @@ for(const [width,height] of [[1000,600],[1356,816],[1600,816]]){const p=framePla
 const small=new RenderCache({maxEntries:2,maxBytes:1000});const a={width:10,height:10},b={width:10,height:10},c={width:10,height:10};small.set('a',a);small.set('b',b);small.get('a');small.set('c',c);assert(!small.get('b'));assert.equal(b.width,0);assert.equal(small.bytes,800);
 let rect={left:0,top:0,width:1000,height:600},nextTimer=0,resize,workers=[];
 const jobs=new Map(),elements=new Map(),documentHandlers={};
-let lastPixels,lastDraw;
-const context=()=>({drawImage(...args){lastDraw=args;},fillRect(){},putImageData(image){lastPixels=image.pixels;}});
+let lastPixels,lastDraw,drawCalls=[];
+const context=()=>({drawImage(...args){lastDraw=args;drawCalls.push(args);},fillRect(){},putImageData(image){lastPixels=image.pixels;}});
 function element(){return{style:{setProperty(){}},dataset:{},classList:{add(){},remove(){},toggle(){}},textContent:'',innerHTML:'',hidden:false,value:'',width:0,height:0,getContext:context,setAttribute(){},getBoundingClientRect(){return rect},addEventListener(type,fn){this.handlers??={};this.handlers[type]=fn},setPointerCapture(){},focus(){}};}
 const swatches=['aurora','ember','ocean','moss','mono'].map(palette=>Object.assign(element(),{dataset:{palette}}));
 globalThis.document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id)},createElement:element,querySelector:element,querySelectorAll(selector){return selector==='[data-palette]'?swatches:[]},addEventListener(type,fn){documentHandlers[type]=fn}};
@@ -56,13 +56,33 @@ assert.equal(lastPixels.length,12*2*4);
 swatches[2].onclick();flush();
 assert.equal(workers.at(-1),panWorker);
 assert.equal(lastPixels.length,12*8*4);
+elements.get('navigationMode').onchange({target:{checked:true}});
+drawCalls=[];
 canvas.handlers.pointerdown(event(1,4));
+canvas.handlers.pointermove(event(3,5));
+// A downsampled proxy fills both exposed edges before painting the sharp overlap.
+const [sharp,left,top,width,height]=lastDraw;
+assert(Math.abs(left-2)<1e-7&&Math.abs(top-1)<1e-7);
+assert.deepEqual([width,height],[12,8]);
+const soft=drawCalls.filter(call=>call.length===9&&call[0]!==sharp);
+assert(soft.some(([, , , , ,x,y,w,h])=>x===0&&y===0&&Math.abs(w-2)<1e-7&&Math.abs(h-1)<1e-7));
+assert.equal(workers.at(-1),panWorker);
+canvas.handlers.pointerup(event(3,5));
+flush();
+const dragWorker=workers.at(-1);
+assert.deepEqual(dragWorker.request.pan,{dx:-2,dy:-1});
+finishField(dragWorker,12,8,26);
+assert.equal(canvas.dataset.renderSource,'pan');
+canvas.handlers.pointerdown(event(1,4));
+drawCalls=[];
 canvas.handlers.pointermove(event(16,4));
+assert.notEqual(lastDraw[0],sharp);
+assert.deepEqual(lastDraw.slice(1),[0,0,12,8]);
 canvas.handlers.pointerup(event(16,4));
 flush();
-assert.notEqual(workers.at(-1),panWorker);
+assert.notEqual(workers.at(-1),dragWorker);
 assert.equal(workers.at(-1).request.pan,undefined);
-console.log('Pan shows the previous image immediately, computes exposed strips, keeps a recolorable field, and falls back when there is no overlap.');
+console.log('Pan preserves sharp overlap, previews exposed areas, computes only exposed strips when possible, and falls back when there is no overlap.');
 
 // Resize between scheduling and starting a viewport render, before the
 // ResizeObserver callback has had a chance to run.

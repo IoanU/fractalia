@@ -19,10 +19,13 @@ function press(key,options={}){
   return prevented;
 }
 const shell=elements.get('canvasShell'),modal=document.getElementById('modal');
+const navigation=elements.get('navigationMode');
 assert(press('h',{target:elements.get('aboutBtn')}));
 assert.equal(shell.dataset.tool,'pan');
+assert.equal(navigation.checked,true);
 assert(press('v'));
 assert.equal(shell.dataset.tool,'select');
+assert.equal(navigation.checked,false);
 canvas.handlers.pointerdown(event(4,200,150));
 canvas.handlers.pointermove(event(4,600,450));
 assert(press('Escape'));
@@ -46,3 +49,31 @@ reset.click=()=>reset.onclick();
 assert(press('Home'));
 assert.equal(elements.get('viewName').textContent,'The Mandelbrot set');
 console.log('Explorer shortcuts work outside the canvas and respect modal, form and browser keyboard input.');
+
+const toggle=checked=>navigation.onchange({target:{checked}});
+const wheel=(deltaY,extra={})=>{
+  prevented=false;
+  canvas.handlers.wheel({deltaY,deltaMode:0,clientX:600,clientY:150,preventDefault(){prevented=true},...extra});
+  return prevented;
+};
+toggle(true);
+const beforeWheel=zoom.textContent,beforeDrag=center.textContent;
+canvas.handlers.pointerdown(event(5,200,150));
+canvas.handlers.pointermove(event(5,250,180));
+canvas.handlers.pointerup(event(5,250,180));
+assert.equal(zoom.textContent,beforeWheel);
+assert.notEqual(center.textContent,beforeDrag);
+const beforeAnchor=center.textContent;
+assert(wheel(-120));
+const afterWheel=zoom.textContent;
+assert.notEqual(afterWheel,beforeWheel);
+assert.notEqual(center.textContent,beforeAnchor);
+assert(wheel(-120,{ctrlKey:true}));
+assert.equal(zoom.textContent,afterWheel);
+assert(!wheel(0));
+assert(wheel(120));
+assert.equal(zoom.textContent,beforeWheel);
+toggle(false);
+assert(!wheel(-120));
+assert.equal(zoom.textContent,beforeWheel);
+console.log('Navigation switch enables drag-to-pan and pointer-centered wheel zoom, without treating pinch as scrolling.');

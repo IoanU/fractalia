@@ -7,7 +7,7 @@ Fractalia is a browser-based fractal explorer. Choose a preset, zoom into a regi
 ## Explore
 
 - Browse 52 presets with thumbnails, including Mandelbrot, Julia, Burning Ship, Multibrot, Tricorn, Phoenix, Newton, Nova, and Lyapunov.
-- Draw a rectangle to zoom, pan with the mouse or arrow keys, and enter exact coordinates. The **?** menu lists keyboard shortcuts.
+- Turn on **Drag + scroll** to pan by dragging and zoom toward the pointer with the wheel. Newly exposed areas show a blurred preview while they render. Turn it off to draw a rectangle to zoom. Arrow keys, exact coordinates, and the **?** shortcuts menu are always available.
 - Adjust the palette, color phase, and iteration count. Fullscreen reuses the rendered image, and panning can reuse overlapping pixels.
 - Export a PNG, copy a shareable link, or save the current view to your browser's Library.
 

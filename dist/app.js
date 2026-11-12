@@ -5,6 +5,7 @@ import{colorize}from'./colorize.js';
 import{catalog,studioHome}from'./catalog.js';
 import{formulas,normalizeRecipe}from'./formulas.js';
 import{mountPresetCatalog,openStudio}from'./studio.js';
+import{wheelZoomFactor,projectView,paintNavigation}from'./navigation.js';
 const $=id=>document.getElementById(id),canvas=$('fractalCanvas'),ctx=canvas.getContext('2d',{alpha:false}),scratch=document.createElement('canvas'),sctx=scratch.getContext('2d');
 const presets={seahorse:{name:'Seahorse Valley',type:'mandelbrot',cx:'-.7453',cy:'.1127',span:'.012',palette:'aurora'},julia:{name:'Julia’s Garden',type:'julia',cx:'0',cy:'0',span:'3.3',palette:'ocean'},ship:{name:'Burning Shores',type:'ship',cx:'-1.755',cy:'-.032',span:'.085',palette:'ember'}};
 let state,timer,resizeTimer,renderId=0,rendering=false,toastTimer,pointers=new Map(),saved=[];
@@ -12,7 +13,8 @@ let workers=[];
 let interactionMode='select',selection=null,dragAction=null,panRemainder=null,snipHistory=[];
 let lastPersistedView='';
 const renderCache=new RenderCache();
-let displayFrame=null,lastReadyFrame=null,pendingPan=null,activeRenderKey='',renderCount=0;
+let displayFrame=null,lastReadyFrame=null,pendingPan=null,pendingPreview=null,activeRenderKey='',renderCount=0;
+let previewImage=null,previewSource=null,previewColorKey='',previewStep,previewPaintQueued=false;
 let recolorQueued=false,recolorCount=0;
 try{saved=JSON.parse(localStorage.getItem('fractalia.collection')||'[]');if(!Array.isArray(saved))saved=[];}catch{}
 const legacyNames={'Valea căluților de mare':'Seahorse Valley','Grădina Juliei':'Julia’s Garden','Corăbii de foc':'Burning Shores','Creația ta Julia':'Your Julia creation','Universul Mandelbrot':'The Mandelbrot set','Coordonatele tale':'Your coordinates','O nouă perspectivă':'A new perspective'};
@@ -90,6 +92,21 @@ function paintFrame(){
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
   if(!displayFrame||!displayFrame.width)return;
   ctx.fillStyle='#0a0d15';ctx.fillRect(0,0,w,h);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  if(pendingPreview?.source.width){
+    const {source}=pendingPreview;
+    if(previewSource!==source||previewColorKey!==source.colorKey||previewStep!==source.step){
+      previewImage??=document.createElement('canvas');
+      const scale=Math.min(1,48/Math.max(source.width,source.height));
+      previewImage.width=Math.max(1,Math.round(source.width*scale));
+      previewImage.height=Math.max(1,Math.round(source.height*scale));
+      const proxy=previewImage.getContext('2d',{alpha:false});
+      proxy.imageSmoothingEnabled=true;proxy.imageSmoothingQuality='high';
+      proxy.drawImage(source,0,0,previewImage.width,previewImage.height);
+      previewSource=source;previewColorKey=source.colorKey;previewStep=source.step;
+    }
+    paintNavigation(ctx,pendingPreview,previewImage,w,h);
+    return;
+  }
   if(pendingPan){
     const {source,dx,dy}=pendingPan,scale=w/source.width,height=source.height*scale;
     ctx.drawImage(source,-dx*scale,(h-height)/2-dy*scale,w,height);
@@ -97,6 +114,12 @@ function paintFrame(){
   }
   const p=framePlacement(displayFrame,w,h);
   ctx.drawImage(displayFrame,p.sx,p.sy,p.sw,p.sh,p.dx,p.dy,p.dw,p.dh);
+}
+function queuePreviewPaint(){
+  if(typeof requestAnimationFrame!=='function'){paintFrame();return;}
+  if(previewPaintQueued)return;
+  previewPaintQueued=true;
+  requestAnimationFrame(()=>{previewPaintQueued=false;if(pendingPreview)paintFrame();});
 }
 function applyFrameColors(frame,reuse,exposed){
   const {palette,shift,glowStart}=state;
@@ -136,7 +159,7 @@ function recolorView(){
 function readyFrame(frame,source){
   applyFrameColors(frame);
   if(frame.view.type==='studio')$('precisionReadout').textContent=frame.deep?'Extended':'Float64';
-  displayFrame=lastReadyFrame=frame;pendingPan=null;rendering=false;canvas.dataset.renderSource=source;$('progress').style.width='0';
+  displayFrame=lastReadyFrame=frame;pendingPan=pendingPreview=null;rendering=false;canvas.dataset.renderSource=source;$('progress').style.width='0';
   $('renderStatus').innerHTML='<i></i><span class="sr-only">Ready</span>';paintFrame();
 }
 function terminateWorkers(){
@@ -144,12 +167,13 @@ function terminateWorkers(){
   workers=[];
 }
 function stopRender(){clearTimeout(timer);timer=null;++renderId;terminateWorkers();}
-function schedule(delay=60,reuse=null){
+function schedule(delay=60,reuse=null,preview=null){
   persistCurrentView();sync();const key=currentRenderKey(),cached=renderCache.get(key);
   if(cached){stopRender();activeRenderKey=key;readyFrame(cached,'cache');return;}
   if(activeRenderKey===key&&(workers.length||timer!==null&&timer!==undefined))return;
-  stopRender();activeRenderKey=key;pendingPan=reuse;rendering=true;$('renderStatus').innerHTML='<i></i><span>Rendering</span>';$('progress').style.width='12%';
-  if(reuse)paintFrame();
+  stopRender();activeRenderKey=key;pendingPan=reuse;pendingPreview=preview;rendering=true;$('renderStatus').innerHTML='<i></i><span>Rendering</span>';$('progress').style.width='12%';
+  if(preview)queuePreviewPaint();
+  else if(reuse)paintFrame();
   timer=setTimeout(()=>{timer=null;render(key);},delay);
 }
 function render(key){
@@ -157,7 +181,7 @@ function render(key){
   if(pendingPan&&(pendingPan.source.width!==plan.width||pendingPan.source.height!==plan.height))pendingPan=null;
   // The viewport can resize while a render is waiting on its timer.
   if(currentRenderKey(plan)!==key){
-    schedule(0,pendingPan);
+    schedule(0,pendingPan,pendingPreview);
     return;
   }
   const iterations=currentIterations(),snapshot={...state};
@@ -177,7 +201,7 @@ function render(key){
     if(id!==renderId)return;
     ++renderId;
     terminateWorkers();
-    activeRenderKey='';pendingPan=null;rendering=false;$('progress').style.width='0';
+    activeRenderKey='';pendingPan=pendingPreview=null;rendering=false;$('progress').style.width='0';
     $('renderStatus').innerHTML='<i></i> Render error';toast(message);
   };
   function accept(d,lane){
@@ -208,7 +232,7 @@ function render(key){
     if(snapshot.type==='studio')$('precisionReadout').textContent=d.deep?'Extended':'Float64';
     $('progress').style.width=d.done?'0':d.progress+'%';
     if(d.done){applyFrameColors(frame,reuse,values);renderCache.set(key,frame);terminateWorkers();readyFrame(frame,reuse?'pan':'worker');}
-    else{applyFrameColors(frame);displayFrame=frame;paintFrame();}
+    else{pendingPreview=null;applyFrameColors(frame);displayFrame=frame;paintFrame();}
   }
   const request={id,state:snapshot,width:plan.width,height:plan.height,iterations,grid:frame.grid};
   if(reuse)request.pan={dx:reuse.dx,dy:reuse.dy};
@@ -224,11 +248,11 @@ function render(key){
     fail('The renderer could not start.');
   }
 }
-function zoom(factor,x=.5,y=.5){
+function zoom(factor,x=.5,y=.5,preview=false){
   cancelSelection();
   ensurePrecision(state);const old=BigInt(state.span),next=old*BigInt(Math.round(factor*1e8))/100000000n,rect=canvas.getBoundingClientRect();
-  if(next<=0n)return;
-  const ox=BigInt(Math.round((x-.5)*1e9)),oy=BigInt(Math.round((y-.5)*rect.height/rect.width*1e9));state.cx=(BigInt(state.cx)+(old-next)*ox/1000000000n).toString();state.cy=(BigInt(state.cy)+(old-next)*oy/1000000000n).toString();state.span=next.toString();ensurePrecision(state);schedule(100);
+  if(next<=0n||rect.width<=0)return;
+  const ox=BigInt(Math.round((x-.5)*1e9)),oy=BigInt(Math.round((y-.5)*rect.height/rect.width*1e9));state.cx=(BigInt(state.cx)+(old-next)*ox/1000000000n).toString();state.cy=(BigInt(state.cy)+(old-next)*oy/1000000000n).toString();state.span=next.toString();ensurePrecision(state);schedule(100,null,preview?projectView(displayFrame,state):null);
 }
 function panReuse(rect,cx,cy,span){
   const source=lastReadyFrame;
@@ -260,16 +284,29 @@ function pan(dx,dy,dragging=false){
   state.cx=(reuse?.cx??cx).toString();state.cy=(reuse?.cy??cy).toString();
   // Carry subpixel movement across pointer events instead of rounding each one away.
   panRemainder=dragging&&reuse?{x:cx-reuse.cx,y:cy-reuse.cy}:null;
-  schedule(100,reuse);
+  const preview=interactionMode==='pan'&&dragging?projectView(reuse?.source??displayFrame,state):null;
+  schedule(100,reuse,preview);
 }
 function cancelSelection(){selection=null;dragAction=null;panRemainder=null;$('selectionBox').hidden=true;$('canvasShell').classList.remove('is-selecting');}
-function setInteractionMode(mode){cancelSelection();interactionMode=mode;$('canvasShell').dataset.tool=mode;for(const [id,value]of[['selectTool','select'],['panTool','pan']]){$(id).classList.toggle('tool-active',mode===value);$(id).setAttribute('aria-pressed',mode===value);}$('interactionHint').innerHTML=mode==='select'?'Draw a rectangle to zoom. Escape cancels selection.':'Drag to pan. Shift also enables pan.';}
+function setInteractionMode(mode,remember=true){
+  cancelSelection();interactionMode=mode;$('canvasShell').dataset.tool=mode;
+  const enabled=mode==='pan';$('navigationMode').checked=enabled;
+  $('interactionHint').textContent=enabled?'Drag to pan. Scroll to zoom toward the pointer.':'Draw a rectangle to zoom. Hold Shift to pan. Escape cancels selection.';
+  if(remember)try{localStorage.setItem('fractalia.navigationMode',mode);}catch{}
+}
 function localPoint(e){const r=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(r.width,e.clientX-r.left)),y:Math.max(0,Math.min(r.height,e.clientY-r.top))};}
 function updateSelection(e){if(!selection)return;selection.end=localPoint(e);const r=canvas.getBoundingClientRect(),box=selectionBounds(selection.start,selection.end,r.width,r.height),el=$('selectionBox');el.hidden=box.width<2||box.height<2;Object.assign(el.style,{left:box.x+'px',top:box.y+'px',width:box.width+'px',height:box.height+'px'});const factor=Math.max(box.width/r.width,box.height/r.height);$('selectionLabel').textContent=factor>0?(1/factor).toLocaleString('en-US',{maximumFractionDigits:1})+'×':'';el.classList.toggle('compact',box.width<145||box.height<60);}
-$('selectTool').onclick=()=>setInteractionMode('select');$('panTool').onclick=()=>setInteractionMode('pan');
+$('navigationMode').onchange=event=>setInteractionMode(event.target.checked?'pan':'select');
 $('undoSnip').onclick=()=>{if(!snipHistory.length)return;cancelSelection();state=snipHistory.pop();$('undoSnip').disabled=!snipHistory.length;schedule(0);};
-// Normal scrolling stays native. Prevent browser pinch zoom over the canvas.
-canvas.addEventListener('wheel',e=>{if(e.ctrlKey)e.preventDefault();},{passive:false});
+canvas.addEventListener('wheel',e=>{
+  // Trackpad pinch can emit Ctrl+wheel. Only ordinary scrolling drives this mode.
+  if(e.ctrlKey){e.preventDefault();return;}
+  if(interactionMode!=='pan'||e.metaKey||e.altKey)return;
+  const r=canvas.getBoundingClientRect(),factor=wheelZoomFactor(e.deltaY,e.deltaMode,r.height);
+  if(factor===1||r.width<=0||r.height<=0)return;
+  e.preventDefault();
+  zoom(factor,(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height,true);
+},{passive:false});
 for(const event of ['gesturestart','gesturechange','gestureend'])canvas.addEventListener(event,e=>e.preventDefault(),{passive:false});
 canvas.addEventListener('dblclick',e=>{const r=canvas.getBoundingClientRect();zoom(.4,(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height);});
 canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size>1){cancelSelection();return;}canvas.focus({preventScroll:true});dragAction=interactionMode==='pan'||e.shiftKey||e.button===1?'pan':'select';if(dragAction==='select'){const point=localPoint(e);selection={start:point,end:point};$('canvasShell').classList.add('is-selecting');}});
@@ -315,7 +352,7 @@ $('studioBtn').onclick=()=>openStudio(openModal,state,(recipe,keepFrame)=>{
   schedule(0);
 });
 $('closeModal').onclick=()=>$('modal').close();$('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
-$('aboutBtn').onclick=()=>openModal('Controls',`<div class="modal-copy"><p>Close this dialog to use the explorer shortcuts.</p><dl class="help-grid"><dt>Zoom</dt><dd>In Select mode, draw a rectangle and release.</dd><dt>Pan</dt><dd>Press <kbd>H</kbd>, then drag. In Select mode, hold <kbd>Shift</kbd> while dragging.</dd><dt>Select</dt><dd><kbd>V</kbd></dd><dt>Cancel selection</dt><dd><kbd>Esc</kbd></dd><dt>Zoom + / −</dt><dd><kbd>+</kbd> <kbd>−</kbd> or double-click to zoom in</dd><dt>Move</dt><dd>Arrow keys</dd><dt>Reset</dt><dd><kbd>Home</kbd></dd></dl><div class="help-note">Views save automatically in the URL. Library saves stay in this browser. PNG exports use the canvas resolution. Deep zoom increases precision automatically; speed and visible detail depend on the iteration count and your device.</div></div>`);
+$('aboutBtn').onclick=()=>openModal('Controls',`<div class="modal-copy"><p>Close this dialog to use the explorer shortcuts.</p><dl class="help-grid"><dt>Drag + scroll</dt><dd>Turn on the switch or press <kbd>H</kbd>. Drag to pan and scroll over the fractal to zoom toward the pointer.</dd><dt>Select a region</dt><dd>Turn off the switch or press <kbd>V</kbd>, then draw a rectangle to zoom.</dd><dt>Quick pan</dt><dd>Hold <kbd>Shift</kbd> while dragging, or use the arrow keys.</dd><dt>Cancel selection</dt><dd><kbd>Esc</kbd></dd><dt>Zoom + / −</dt><dd><kbd>+</kbd> <kbd>−</kbd> or double-click to zoom in</dd><dt>Reset</dt><dd><kbd>Home</kbd></dd></dl><div class="help-note">Views save automatically in the URL. Library saves stay in this browser. PNG exports use the canvas resolution. Deep zoom increases precision automatically; speed and visible detail depend on the iteration count and your device.</div></div>`);
 $('saveBtn').onclick=()=>{
   recolorCurrentFrame();
   if(rendering){toast('Wait for the render to finish before saving.');return;}
@@ -362,6 +399,7 @@ state=createState(presets.seahorse);let restored=false;
 try{if(performance.getEntriesByType('navigation')[0]?.type==='reload'){const saved=JSON.parse(sessionStorage.getItem('fractalia.currentView')||'null');if(saved?.address===location.href){state=validateState(saved.view);restored=true;}}}catch{}
 if(!restored&&location.hash.startsWith('#view=')){try{state=validateState(JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(6))))));}catch{toast('Invalid link. Opening Seahorse Valley.');}}
 const narrow=typeof matchMedia==='function'&&matchMedia('(max-width:720px)').matches;
+try{if(localStorage.getItem('fractalia.navigationMode')==='pan')setInteractionMode('pan',false);}catch{}
 $('workspace').classList.toggle('controls-hidden',narrow);$('settingsBtn').setAttribute('aria-expanded',String(!narrow));
 $('settingsBtn').onclick=()=>{const hidden=$('workspace').classList.toggle('controls-hidden');$('settingsBtn').setAttribute('aria-expanded',String(!hidden));};
 sync();schedule(0);setTimeout(thumbnails,500);
