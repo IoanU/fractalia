@@ -1,0 +1,218 @@
+[
+  {
+    "key": "mandel18",
+    "state": {
+      "name": "Mandelbrot din explorare 10^18",
+      "span": "3300000000000000000000000000000000000000000",
+      "digits": 60,
+      "cx": "-747032094202587443822971336083886877794229834742896176162330",
+      "cy": "113894371336960151016799574691571031479274908978747355342317",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false
+    },
+    "log": 17.999999999999996,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 3813.2768,
+    "previewMs": 123.02590000000001,
+    "mediumMs": 373.413,
+    "reps": 1,
+    "trialsMs": [
+      3813.2768
+    ],
+    "quality": {
+      "significantGroups": 25,
+      "dominantShare": 0.1741835967884405,
+      "variedTiles": 93,
+      "edgeShare": 0.37752555833689155,
+      "backgroundShare": 0,
+      "detailed": true
+    }
+  },
+  {
+    "key": "mandelUser",
+    "state": {
+      "name": "Mandelbrot din explorare 10^20.5",
+      "span": "10342377305044022284708879964387532949341",
+      "digits": 60,
+      "cx": "-747032094202587443822971336083886877794229834742896176162330",
+      "cy": "113894371336960151016799574691571031479274908978747355342317",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false
+    },
+    "log": 20.503893562455215,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 2345.8559999999998,
+    "previewMs": 95.87950000000001,
+    "mediumMs": 239.9453999999996,
+    "reps": 1,
+    "trialsMs": [
+      2345.8559999999998
+    ],
+    "quality": {
+      "significantGroups": 21,
+      "dominantShare": 0.12967923956177244,
+      "variedTiles": 80,
+      "edgeShare": 0.17671236402489607,
+      "backgroundShare": 0,
+      "detailed": true
+    }
+  },
+  {
+    "key": "mini12",
+    "state": {
+      "digits": 40,
+      "cx": "4285461537331605598415179302511236",
+      "cy": "9999987178510870906481620398302436089494",
+      "span": "99271616924960575096456353300",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false,
+      "name": "Mandelbrot, period 17"
+    },
+    "log": 11.521688844200963,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 1501.6974,
+    "previewMs": 84.17859999999928,
+    "mediumMs": 187.54719999999998,
+    "reps": 1,
+    "trialsMs": [
+      1501.6974
+    ],
+    "quality": {
+      "significantGroups": 22,
+      "dominantShare": 0.16149029017415722,
+      "variedTiles": 91,
+      "edgeShare": 0.14952823246718877,
+      "backgroundShare": 0.15868874503961714,
+      "detailed": true
+    }
+  },
+  {
+    "key": "mini18",
+    "state": {
+      "digits": 60,
+      "cx": "-418492717366296181085629794817805200783446732347615",
+      "cy": "1000000001252097058910516519085131930765905410076091308381533",
+      "span": "9467176879710378186181956516627983383552787",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false,
+      "name": "Mandelbrot, period 25"
+    },
+    "log": 17.542293448557007,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 1405.5787,
+    "previewMs": 86.7497000000003,
+    "mediumMs": 179.21730000000025,
+    "reps": 1,
+    "trialsMs": [
+      1405.5787
+    ],
+    "quality": {
+      "significantGroups": 21,
+      "dominantShare": 0.15990955953118613,
+      "variedTiles": 91,
+      "edgeShare": 0.18118948641783353,
+      "backgroundShare": 0.15990955953118613,
+      "detailed": true
+    }
+  },
+  {
+    "key": "mini40",
+    "state": {
+      "digits": 80,
+      "cx": "-607757026028174425107963603237434417049930240349703696634604",
+      "cy": "100000000000000000000303263488477417019076152507305199532848223166762003969360684",
+      "span": "25059408934919527490476983939598789408305",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false,
+      "name": "Mandelbrot, period 55"
+    },
+    "log": 40.119543116608824,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 1867.7207000000017,
+    "previewMs": 88.35840000000098,
+    "mediumMs": 197.57810000000063,
+    "reps": 1,
+    "trialsMs": [
+      1867.7207000000017
+    ],
+    "quality": {
+      "significantGroups": 25,
+      "dominantShare": 0.1647479927753095,
+      "variedTiles": 90,
+      "edgeShare": 0.23473346800777953,
+      "backgroundShare": 0.1647479927753095,
+      "detailed": true
+    }
+  },
+  {
+    "key": "mini100",
+    "state": {
+      "digits": 140,
+      "cx": "-1122636056920307133250958630417404458445504286790269741112455258192686894050654942260400985",
+      "cy": "100000000000000000000000000000000000000000000000001361365536810347441671154413008570111853445694870024061643884987321595162789707105427024392",
+      "span": "38947728273898154204607206105690946132003",
+      "iterations": 3000,
+      "type": "mandelbrot",
+      "palette": "aurora",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false,
+      "name": "Mandelbrot, period 134"
+    },
+    "log": 99.92803180846964,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 4148.693300000001,
+    "previewMs": 128.04759999999987,
+    "mediumMs": 409.7528000000002,
+    "reps": 1,
+    "trialsMs": [
+      4148.693300000001
+    ],
+    "quality": {
+      "significantGroups": 25,
+      "dominantShare": 0.18775625898142412,
+      "variedTiles": 88,
+      "edgeShare": 0.3261798807992561,
+      "backgroundShare": 0.18775625898142412,
+      "detailed": true
+    }
+  }
+]

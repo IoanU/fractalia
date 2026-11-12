@@ -1,0 +1,1457 @@
+% !TeX program = xelatex
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=24mm,includeheadfoot,headheight=14pt]{geometry}
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+\setmainfont{lmroman10-regular.otf}[BoldFont=lmroman10-bold.otf,ItalicFont=lmroman10-italic.otf,BoldItalicFont=lmroman10-bolditalic.otf]
+\setsansfont{lmsans10-regular.otf}[BoldFont=lmsans10-bold.otf]
+\setmonofont{lmmono10-regular.otf}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{microtype}
+\usepackage{array,booktabs,longtable}
+\usepackage{enumitem,fancyvrb,xcolor,fancyhdr}
+\usepackage{hyperref}
+\definecolor{ink}{HTML}{152A45}
+\definecolor{link}{HTML}{16597A}
+\hypersetup{colorlinks=true,linkcolor=link,citecolor=link,urlcolor=link,
+  pdftitle={Fractalia: Deep-Zoom Rendering of Composable Fractals},
+  pdfauthor={Fractalia},pdflang={en},bookmarksdepth=2}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily\color{ink}FRACTALIA}
+\fancyhead[R]{\small\sffamily\color{ink}Technical report}
+\fancyfoot[C]{\small\sffamily\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\setlength{\jot}{5pt}
+\setlength{\abovedisplayskip}{12pt plus 3pt minus 2pt}
+\setlength{\belowdisplayskip}{12pt plus 3pt minus 2pt}
+\setlength{\emergencystretch}{2em}
+\setlength{\parskip}{3pt plus 1pt}
+\setlength{\parindent}{0pt}
+\setlist{topsep=5pt,itemsep=3pt}
+\numberwithin{equation}{section}
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}[lemma]{Proposition}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{R}[1]{>{\raggedleft\arraybackslash}p{#1}}
+\newlength{\TW}
+\newcommand{\tableformat}[1]{\small\setlength{\tabcolsep}{4pt}%
+  \renewcommand{\arraystretch}{1.20}\setlength{\TW}{\dimexpr\textwidth-#1pt\relax}}
+\newcommand{\abs}[1]{\lvert#1\rvert}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\code}[1]{\texttt{#1}}
+\DeclareMathOperator{\expmone}{expm1}
+\DeclareMathOperator{\clamp}{clamp}
+\DeclareMathOperator{\lcm}{lcm}
+
+\begin{document}
+\thispagestyle{plain}
+\begin{center}
+  \vspace*{0.8em}
+  {\LARGE\bfseries\color{ink}Fractalia: Deep-Zoom Rendering\\[3pt]
+   of Composable Fractals\par}
+  \vspace{0.65em}
+  {\small Mathematical specification, implementation, and arithmetic cost\par}
+\end{center}
+
+\begin{abstract}
+Fractalia is a browser renderer for 24 orbit primitives, their cyclic
+compositions, and periodically forced logistic maps. This report specifies
+the maps and their observables, derives the differences used to share
+high-precision reference orbits, and describes the conditions for accepting
+an approximation or evaluating a pixel directly. An operation-count model
+covers all 52 presets and one mixed Warp recipe. Between magnifications
+\(10^{12}\) and \(10^{100}\), it predicts an \(8.18\)-fold increase in
+direct arithmetic work for binary fixed-point kernels with a fixed operation
+mix, and a \(15.45\)-fold increase for Warp because its residual sine
+polynomial also gains terms. Archived frame timings show why these ratios
+do not predict latency across regions or rendering paths. We distinguish
+established methods, engine-specific engineering and measurements, and
+candidates for further study. The evidence supports an implementation and
+evaluation contribution; it does not establish a new general perturbation
+method or priority for the individual identities.
+\end{abstract}
+
+{\small\textbf{Keywords:} fractal rendering, perturbation, fixed-point
+arithmetic, hybrid maps, operation counts, deep zoom.}
+
+\setcounter{tocdepth}{1}
+\tableofcontents
+\clearpage
+
+\section{Introduction and scope}\label{sec:intro}
+
+A deep view may place adjacent pixels much closer together than one
+floating-point unit at the viewport center. Evaluating the entire image with
+large integers preserves the distinction but can make ordinary interaction
+slow. Reference-orbit perturbation separates the cost of storing a deep
+location from the cost of tracking nearby orbits. Martin's technical note and
+Khashin's preprint describe this idea for Mandelbrot rendering; Heiland-Allen
+documents rebasing, hybrid maps, and linear approximation
+\cite{martin,khashin,heiland,fraktaler}.
+
+Fractalia's design question is narrower: how can a finite library of
+heterogeneous steps share this rendering machinery while retaining its own
+initial conditions, convergence rules, orbit traps, and fallback? The
+report specifies the implementation and gives a reproducible arithmetic
+inventory. It is a technical report on the local checkout, including the
+optimizations beyond revision \code{247a269}. The work model is analytical;
+the archived timings are descriptive. The novelty and strength of evidence
+are assessed in Section~\ref{sec:prior}.
+
+\section{Mathematical specification}\label{sec:maps}
+
+\subsection{Sampling and finite observables}
+
+Let \(W,H\) be raster dimensions, \(C\) the complex viewport center, and
+\(s>0\) its width in the complex plane. For integer indices \(i,j\) the
+renderer samples the centers of the final raster cells:
+\begin{align}
+  p_{ij}
+  &= C+\frac{s}{W}
+     \left(i+\frac12-\frac W2+\ii\left(j+\frac12-\frac H2\right)\right),
+     \label{eq:grid}\\
+  Z_{\rm zoom}&=\frac{3.3}{s},
+  & x&=\log_{10} Z_{\rm zoom}. \label{eq:zoom}
+\end{align}
+The imaginary coordinate increases down the screen. The coarse passes
+sample at stride \(h\), replacing \(i+\tfrac12\) and \(j+\tfrac12\) by
+\(h(i+\tfrac12)\) and \(h(j+\tfrac12)\). Pan can express the same lattice
+using a retained anchor and integer shifts. The implementation is in
+\href{../dist/worker.js}{\code{worker.js}} and
+\href{../dist/math.js}{\code{math.js}}.
+
+A parameter plane varies \(c\) for a chosen initial state; a dynamical
+plane varies the initial state for fixed \(c\). Julia and Mandelbrot give the
+historical context \cite{julia,mandelbrot}. The image represents the chosen
+finite-budget observable. In particular, consuming \(N\) iterations does
+not prove membership in a bounded set, and a bailout chosen for a hybrid,
+rational, or transcendental map need not be a mathematical escape radius.
+
+\subsection{Orbit primitives}
+
+Write \(z=a+\ii b\), \(u=a^2-b^2\), \(v=2ab\), and
+\(c=c_n(p)\). Table~\ref{tab:maps} gives all 24 identifiers grouped by
+shared expressions. The implementation sources are
+\href{../dist/formulas.js}{\code{formulas.js}} and
+\href{../dist/precise-formulas.js}{\code{precise-formulas.js}}.
+
+\begingroup\tableformat{16}
+\begin{longtable}{@{}L{.24\TW}L{.37\TW}L{.39\TW}@{}}
+\caption{The orbit primitives before bailout or convergence tests.}\label{tab:maps}\\
+\toprule
+Identifier & \(z_{n+1}\) & Interpretation\\
+\midrule\endfirsthead
+\toprule Identifier & \(z_{n+1}\) & Interpretation\\\midrule\endhead
+\bottomrule\endlastfoot
+\code{z2}, \code{z3}, \code{z4}, \code{z5}, \code{z6}, \code{z7}
+  & \(z^k+c\), \(k=2,\ldots,7\)
+  & Quadratic Mandelbrot or Julia; higher-degree Multibrot or Julia.\\
+\code{tricorn}, \code{multi3}, \code{multi4}, \code{multi5}
+  & \(\overline z^{\,k}+c\), \(k=2,3,4,5\)
+  & Conjugate before taking the power.\\
+\code{ship} & \((\abs{a}+\ii\abs{b})^2+c\) & Burning Ship \cite{ship}.\\
+\code{perpendicular} & \((\abs{a}-\ii b)^2+c\) & Fold real, reflect imaginary.\\
+\code{heart} & \((\abs{a}+\ii b)^2+c\) & Fold real before squaring.\\
+\code{celtic} & \(\abs{u}+\ii v+c\) & Fold the real component of the square.\\
+\code{buffalo} & \(\abs{u}-\ii\abs{v}+c\) & Fold both components of the square.\\
+\code{warp} & \(z^2+0.35[\sin(3a)+\ii\sin(3b)]+c\) & Two real sines; not a complex sine.\\
+\code{phoenix} & \(z^2+mz_{n-1}+c\) & Real memory weight \(m\); \(z_{-1}=0\).\\
+\code{lambda} & \(c(z-z^2)\) & The parameter is a multiplier.\\
+\code{cubic} & \(z^3-0.9z+c\) & Critical points \(\pm\sqrt{0.3}\).\\
+\code{newton} & \((2z+\theta_n/z^2)/3\) & \(\theta_n=1+c\) with Julia; \(1+c-p\) otherwise.\\
+\code{nova} & \((2z+1/z^2)/3+c\) & Add the parameter after the Newton update.\\
+\code{magnet} & \(\big((z^2+c-1)/(2z+c-2)\big)^2\) & Rational map with a test near \(1\).\\
+\code{exp} & \(e^z+c\) & Complex exponential.\\
+\code{sine} & \(\sin z+c\) & Complex sine.\\
+\end{longtable}
+\endgroup
+
+\paragraph{Newton and Nova.}
+At one step, the root target \(\theta\) is fixed. For
+\(F(z)=z^3-\theta\) and \(z\ne0\), Newton's rule \cite{hubbard} gives
+\begin{align*}
+  F'(z)&=3z^2,\\
+  z-\frac{F(z)}{F'(z)}
+    &=z-\frac{z^3-\theta}{3z^2}\\
+    &=\frac{2z+\theta/z^2}{3}.
+\end{align*}
+The unmodified Newton preset uses \(\theta=1\). Nova applies the same
+update with \(\theta=1\), then adds \(c\). Its color sector is an
+observable, not a verified root of \(z^3-1\) when \(c\ne0\).
+
+\paragraph{Cubic and transcendental maps.}
+The critical seeds are obtained from
+\begin{align*}
+  \frac{d}{dz}(z^3-0.9z+c)&=3z^2-0.9,\\
+  3z^2-0.9=0&\iff z=\pm\sqrt{0.3}.
+\end{align*}
+The preset with two seeds returns the smaller scalar observable of the two
+orbits. Sine and exponential are evaluated through real functions
+\cite{dlmf}:
+\begin{align}
+  e^{a+\ii b}&=e^a(\cos b+\ii\sin b),\\
+  \sin(a+\ii b)&=\sin a\cosh b+\ii\cos a\sinh b.
+\end{align}
+
+\subsection{Termination, traps, and color}
+
+The default escape radius is \(16\); a single Newton step uses \(10^{14}\).
+For a degree-\(k\) polynomial well outside the bounded region, the
+motivation for smooth dwell \cite{vepstas} is
+\begin{align*}
+  \abs{z_{n+1}}&\approx\abs{z_n}^{k},\\
+  \log\abs{z_{n+1}}&\approx k\log\abs{z_n},\\
+  \log_k(\log\abs{z_{n+1}})&\approx
+     1+\log_k(\log\abs{z_n}).
+\end{align*}
+Fractalia uses, at the first escape after step \(n\),
+\begin{equation}
+  V=n+1-\log_k(\log_2\abs{z_{n+1}}).
+\end{equation}
+Here \(k\) is the designated exponent of the escaping step, defaulting
+to \(2\) for steps without an explicit power, including Cubic, Warp,
+Sine and Exponential. Without an escape, the escape observable is \(N\).
+
+For single-step Newton and Nova, convergence is tested before the escape
+and trap update; Magnet tests proximity to \(1\). Their scalar rules are
+\begin{align}
+  \abs{z_{n+1}-z_n}^2<10^{-12}
+  &\ \Longrightarrow\
+  V=3+14B+\min(10,2\log_2(n+1)),\\
+  B&=1+\operatorname{round}\left(\frac{3\arg(z_{n+1})}{2\pi}\right),\\
+  \abs{z_{n+1}-1}^2<10^{-12}
+  &\ \Longrightarrow\
+  V=25+\min(20,0.2n)\quad\text{(Magnet)}.
+\end{align}
+These single-step convergence tests are disabled in longer sequences.
+At a zero denominator the direct evaluator returns \(N\); extreme
+transcendental arguments can trigger a numerical guard before evaluating
+the function. With a trap, a converging step returns the previously
+accumulated trap value.
+
+For trap position \(\rho\), define
+\begin{align}
+  d_{\rm ring}(z)&=\big|\abs z-\rho\big|,\\
+  d_{\rm cross}(z)&=\min\{\abs{\Re z-\rho},\abs{\Im z-\rho}\},\\
+  d_*&=\min_n d(z_{n+1}),\\
+  V_{\rm trap}(d_*)&=\min\{N-0.001,\max(0,-6\log_2(d_*+10^{-12}))\}.
+\end{align}
+Trap modes change the observable, not the orbit. The cached scalar field
+is mapped to RGBA separately. The phase samples the palette at
+\(\operatorname{frac}(0.021V+\phi/360)\), using
+\(f^2(3-2f)\) between adjacent colors. The background is \((10,14,25)\).
+Optional glow blends the palette toward this background with
+\begin{align*}
+  h&=\clamp_{[0,1]}\big((V-\texttt{glowStart})/2.25\big),\\
+  w&=0.065+0.64h^2(3-2h).
+\end{align*}
+See \href{../dist/colorize.js}{\code{colorize.js}}.
+
+\subsection{Periodically forced Lyapunov mode}
+
+The pixel is the pair \((A,B)\in[0,4]^2\). A periodic binary word
+selects \(r_n\in\{A,B\}\). If \(f_r(u)=ru(1-u)\), then
+\begin{align}
+  u_0&=\tfrac12,\qquad u_{n+1}=f_{r_n}(u_n),\\
+  f'_{r_n}(u_n)&=r_n(1-2u_n),\\
+  \frac{\partial u_{n+1}}{\partial u_0}
+    &=\prod_{j=0}^{n} f'_{r_j}(u_j).
+\end{align}
+The last line follows by the chain rule. Taking the logarithm of the
+absolute derivative turns a product into a sum. With 24 discarded
+iterations and a floor for zero derivatives, the displayed estimate is
+\begin{equation}
+  \widehat\lambda_N=\frac{1}{N}
+  \sum_{n=24}^{N+23}\log\max\{10^{-15},\abs{r_n(1-2u_n)}\}.
+\end{equation}
+Outside \([0,4]^2\) the value is \(N\). Negative estimates use the trap
+color function with distance \(-\widehat\lambda_N\); nonnegative ones
+use \(34+\min(14,22\widehat\lambda_N)\). The preset words are
+\code{AABAB} and \code{ABBABAAB}. The forcing and Lyapunov images are
+established prior art \cite{markus}; the finite estimate does not classify
+the asymptotic orbit with certainty.
+
+\section{Formula Studio: construction and specialization}\label{sec:studio}
+
+\subsection{Recipe semantics}
+
+A recipe is normalized data, not executable input. It holds one to eight
+steps, each identified by one of the 24 primitives and repeated an
+integer \(R_j\in[1,16]\) times. Per-step controls include Julia, a complex
+constant \(J_j\in[-8,8]^2\), and Drift with amplitude \(A_j\in[0,2]\)
+and period \(P_j\in[2,96]\). Global controls select the seed,
+escape/convergence or a trap, \(\rho\in[0.01,4]\), Phoenix memory
+\(m\in[-2,2]\), or a Lyapunov word of length 1--24. Missing or invalid
+inputs are normalized by \href{../dist/formulas.js}{\code{formulas.js}}.
+
+Let \(S\) be the ordered word obtained by repeating each step as
+specified, of length \(L=\sum_j R_j\le128\). At global iteration \(n\)
+the step is \(j=S[n\bmod L]\). The parameter is
+\begin{align}
+  c^{(0)}_j(p)&=
+  \begin{cases}
+    J_j, & \text{Julia is enabled for step }j,\\
+    p,   & \text{otherwise},
+  \end{cases}\\
+  d_j(n)&=
+  \begin{cases}
+    A_j\exp(2\pi\ii(n\bmod P_j)/P_j), & \text{Drift is enabled},\\
+    0, & \text{otherwise},
+  \end{cases}\\
+  c_n(p)&=c^{(0)}_j(p)+d_j(n). \label{eq:parameter}
+\end{align}
+The forcing period divides \(\lcm(L,P_{j_1},\ldots,P_{j_k})\) over active
+nonzero drift steps. Indeed, shifting \(n\) by that least common multiple
+preserves both the recipe index and every active drift phase. The state
+itself need not repeat. Phoenix retains \(z_{n-1}\) at every step of a
+mixed recipe, including steps that do not read the memory.
+
+Automatic seeding uses the pixel for an initial Julia step or Newton.
+Otherwise Lambda uses \(1/2\), Nova uses \(1\), Cubic uses its critical
+seed, and other steps start at zero. Explicit seeds are Pixel, Zero and
+Formula seed; Formula seed uses \(1\) outside the Lambda/Cubic cases.
+Two seeds are evaluated only for a single Cubic step with a critical,
+nonpixel seed.
+
+\paragraph{Running example.}
+The study recipe consists of a cubic Julia step with Drift, followed by
+three parameter-plane Warp steps. For \(n\bmod4=0\),
+\begin{align*}
+  z_0&=p,\\
+  c_n&=-0.23+0.53\ii+0.08\exp(2\pi\ii(n\bmod13)/13),\\
+  z_{n+1}&=z_n^3+c_n.
+\end{align*}
+For the other residues \(c_n=p\) and the Warp map applies. The combined
+forcing period is \(\lcm(4,13)=52\).
+
+\subsection{Generation and rendering}
+
+\texttt{Shuffle} samples up to 16 candidate recipes. Each contains two
+to four steps drawn with replacement from the first steps of the Hybrid
+and Drift presets, with one to three repetitions per step. A
+\(24\times16\) preview at \(N=200\) accepts candidates with 12--288
+budget-limited points and at least ten distinct floored escape values.
+Otherwise it uses one of three known recipes. This is a visibility
+heuristic, not a classification of the dynamics. See
+\href{../dist/catalog.js}{\code{catalog.js}} and
+\href{../dist/studio.js}{\code{studio.js}}.
+
+\begin{Verbatim}[fontsize=\small]
+Normalize the recipe and determine the seed(s).
+If it matches a classic map, route to the classic evaluator.
+Otherwise prepare the Float64 or fixed-point step descriptors.
+Cache the per-step Drift tables.
+For a supported deep view, trace high-precision reference orbits.
+Attach per-step power, fold, derivative and quotient data.
+Use an eligible shared prefix, then propagate the pixel differences.
+Retry with another reference if uncertain; otherwise evaluate directly.
+\end{Verbatim}
+
+Classic routing recognizes a single escape step without Drift:
+quadratic Julia with pixel seed, or quadratic Mandelbrot or Burning Ship
+with zero seed and no Julia parameter. A non-drifting quadratic trap has
+its own shallow evaluator. At depth, general Studio recipes share a
+kernel whose metadata and recurrences depend on the ordered steps.
+Single-step Sine and Exponential Julia may instead use a specialized
+analytic evaluator. The engine builds descriptors and evaluators from a
+fixed vocabulary. It neither emits new JavaScript source nor derives
+arbitrary user expressions symbolically.
+
+\section{Precision and routing}\label{sec:precision}
+
+The view stores the center and span as decimal-scaled integers with
+scale \(S_d=10^d\). A fresh view starts at \(d=40\). If the integer
+span has fewer than 25 decimal digits, the state multiplies its
+integers by \(10^{20}\) and increments \(d\) by 20. This preserves the
+represented point but cannot restore previously discarded digits. The
+classic direct evaluator rescales each real component of the complex
+square by integer division by \(S_d\).
+
+Studio and the Burning Ship reference path use binary fixed point:
+\begin{align}
+  b(x,W)&=\left\lceil(x+\log_{10}W+32)\log_2 10\right\rceil,\\
+  U&=2^b,\\
+  \operatorname{mul}_b(A,B)&=\left\lfloor AB/U\right\rfloor,\\
+  \operatorname{div}_b(A,B)&=\operatorname{trunc}(UA/B).
+\end{align}
+The \(x+\log_{10}W\) term follows pixel spacing up to the constant
+\(\log_{10}3.3\), and 32 adds decimal guard digits. A right shift
+implements multiplication rescaling; signed integer division truncates
+toward zero. Columns and rows share the coordinate conversions.
+The word \emph{direct} means finite-precision evaluation without
+perturbation, not exact real arithmetic.
+
+The main deep-zoom condition is \(x>11\). A view entered through Studio
+can also switch when
+\begin{equation}
+  s/W\le128\,2^{-52}\max\{1,\abs{\Re C},\abs{\Im C}\}.
+\end{equation}
+Mandelbrot and Julia then use decimal references. Burning Ship uses
+binary reference traces and a decimal direct fallback; other Studio
+recipes use binary traces and binary fallback. The reference routes
+require \(s>10^{-250}\); below this threshold a direct path remains
+available, including an eligible fixed-point block test. This is a
+routing threshold, not a maximum zoom. Practical limits include memory,
+latency, finite coordinate inputs and the app's input caps.
+The analytic path requires a single non-drifting Sine or Exponential
+Julia step, escape coloring, and Auto or Pixel seed.
+
+\section{Numerical methods and derivations}\label{sec:methods}
+
+\subsection{Quadratic perturbation and polynomial prefixes}
+
+Let \(Z_n\) be the reference state and \(C\) its parameter. Represent
+the pixel by the differences \(\delta_n=z_n-Z_n\) and \(\eta=c-C\).
+For the quadratic map, the two orbits give
+\begin{align}
+  Z_{n+1}&=Z_n^2+C,\\
+  z_{n+1}&=(Z_n+\delta_n)^2+C+\eta,\\
+  \delta_{n+1}
+    &=z_{n+1}-Z_{n+1}\notag\\
+    &=2Z_n\delta_n+\delta_n^2+\eta. \label{eq:quadratic-delta}
+\end{align}
+The last line avoids subtracting rounded, nearly equal orbit values.
+Mandelbrot starts with \(\delta_0=0\); classic Julia has \(\eta=0\)
+and starts from a displaced seed. This construction and prefix skipping
+are established \cite{martin,khashin,heiland}.
+
+For the shared Mandelbrot prefix, write \(\eta=Ru\), with \(\abs u\le1\), and keep
+four powers of \(u\):
+\begin{align}
+  P_n(u)&=\sum_{k=1}^4 a_{n,k}u^k,
+  & a_{0,k}&=0,\\
+  a_{n+1,k}
+    &=2Z_n a_{n,k}
+       +\sum_{\substack{i,j\ge1\\i+j=k}}a_{n,i}a_{n,j}
+       +R\,\mathbf1_{k=1}. \label{eq:coeff}
+\end{align}
+Equation~\eqref{eq:coeff} follows by collecting coefficients in
+\(2Z_nP_n+P_n^2+Ru\). To bound the residual, let
+\(e_n=\delta_n-P_n\), \(B_n=\sum_k\abs{a_{n,k}}\), and
+\(\abs{e_n}\le E_n\). The discarded terms of \(P_n^2\) have total
+magnitude at most \(T_n=\sum_{i+j>4}\abs{a_{n,i}}\abs{a_{n,j}}\).
+Subtracting the retained polynomial gives
+\begin{align}
+  e_{n+1}&=(2Z_n+2P_n)e_n+e_n^2+
+             [P_n^2]_{\deg>4},\\
+  E_{n+1}&\le(2\abs{Z_n}+2B_n+E_n)E_n+T_n
+             \quad\text{in exact arithmetic}. \label{eq:poly-error}
+\end{align}
+The implementation adds a rounding allowance to the right-hand side.
+It keeps advancing only if the estimated error is at most
+\(10^{-12}B_{n+1}\), \(B_{n+1}+E_{n+1}<0.01\), and the enclosing disk
+stays inside radius 16. A prefix of at least eight steps is evaluated
+by Horner's rule; the pixel resumes the full recurrence afterwards.
+
+\paragraph{Rebasing and recovery.}
+If the reconstructed orbit becomes smaller than its difference, or
+the reference ends, Mandelbrot can rebase the current state to \(Z_0=0\)
+without resetting the pixel iteration or parameter. Severe cancellation
+requests recovery. After rebasing, an estimated amplified error above
+\(10^{-8}\) can trigger another reference near \((s/5,-s/7)\) from the
+center; agreement in class and within \(10^{-4}\) in the scalar value
+can avoid a direct retry. The Julia path instead falls back for a short
+reference or when
+\(\abs{Z_n+\delta_n}^2<10^{-7}\abs{Z_n}^2\).
+
+For the Mandelbrot recovery route at pixel step above \(10^{-26}\) and
+\(\abs{\Re C}+\abs{\Im C}<8\), each component is a pair of doubles
+\(h+\ell\). A Dekker-style split with factor \(2^{27}+1\) captures the
+rounding residual of the leading product \cite{dekker}. The retained
+product correction also includes \(h_A\ell_B+\ell_Ah_B\); a TwoSum-style
+residual corrects additions. BigInt is used when the propagated
+double-double error estimate exceeds \(10^{-9}\).
+See \href{../dist/mandelbrot-precision.js}{\code{mandelbrot-precision.js}}.
+
+\paragraph{Shallow analytic membership tests.}
+For the main cardioid, an attracting fixed point satisfies
+\(c=z-z^2\) and \(\abs{2z}<1\). Put \(c=a+\ii b\),
+\(w=c-\tfrac14\), \(u=\Re w\), \(r=\abs w\), and \(q=r^2\).
+Choose \(\sqrt{-w}\) with nonnegative real part. Then
+\begin{align*}
+  2z&=1-2\sqrt{-w},\\
+  \big(\Re\sqrt{-w}\big)^2&=(r-u)/2,\\
+  \abs{2z}^2&=1-4\sqrt{(r-u)/2}+4r,\\
+  \abs{2z}\le1
+     &\iff 2q+u\le r\\
+     &\iff (2q+u)^2\le q \quad (u\ge-r)\\
+     &\iff q(q+u)\le b^2/4 .
+\end{align*}
+For period two, \(f(z)=z^2+c\) satisfies
+\begin{align*}
+  f(f(z))-z&=(z^2-z+c)(z^2+z+c+1),\\
+  z_1z_2&=c+1,\\
+  \abs{f'(z_1)f'(z_2)}\le1
+     &\iff\abs{c+1}\le\tfrac14 .
+\end{align*}
+The two inequalities, with boundaries included, are the early tests
+used by the classic Float64 Mandelbrot path.
+
+\subsection{Differences for composed steps}
+
+The parameter difference \(\eta\) is zero on Julia steps and equals
+the pixel displacement on parameter-plane steps. The Drift offset
+in Equation~\eqref{eq:parameter} cancels between pixels at the same
+iteration. At Newton steps the root target is shared even in the
+parameter plane because \(p\) cancels in \(1+c-p\).
+
+\paragraph{Powers and folds.}
+Put \(D_k=(Z+\delta)^k-Z^k\). Factoring one power gives a recurrence
+without cancellation:
+\begin{align}
+  D_k&=(Z+\delta)(Z+\delta)^{k-1}-Z\,Z^{k-1}\notag\\
+     &=(Z+\delta)\big[(Z+\delta)^{k-1}-Z^{k-1}\big]
+       +\delta Z^{k-1}\notag\\
+     &=(Z+\delta)D_{k-1}+\delta Z^{k-1}. \label{eq:power-delta}
+\end{align}
+For conjugation, conjugate \(Z\) and \(\delta\) before the recurrence.
+For an absolute-value fold with real reference \(r\) and offset \(h\),
+the exact difference can be evaluated without directly subtracting the
+two magnitudes:
+\begin{equation}
+  \abs{r+h}-\abs r =
+  \begin{cases}
+    h,         &r\ge0,\ r+h\ge0,\\
+    -2r-h,     &r\ge0,\ r+h<0,\\
+    -h,        &r<0,\ r+h\le0,\\
+    2r+h,      &r<0,\ r+h>0 .
+  \end{cases} \label{eq:fold}
+\end{equation}
+Ship, Perpendicular, and Heart use this on inputs; Celtic and Buffalo
+use it after squaring. Related folded perturbation is established
+\cite{heiland,fraktaler,kf}.
+
+\paragraph{Cubic, Phoenix, and Lambda.}
+The updates, with \(g=Z-Z^2\) and \(\Delta g=\delta-D_2\), are
+\begin{align}
+  \Delta_{\rm Cubic}&=D_3-0.9\delta+\eta,\\
+  \Delta_{\rm Phoenix}&=D_2+m\delta_{\rm prev}+\eta,\\
+  \Delta_{\rm Lambda}
+     &=(C+\eta)(g+\Delta g)-Cg\notag\\
+     &=C\Delta g+\eta(g+\Delta g).
+\end{align}
+Cubic takes the magnitude \emph{after} forming the derivative
+\(3z^2-0.9\). Taking magnitudes first would lose cancellation at its
+critical points.
+
+\paragraph{Warp, Sine, and Exponential.}
+Use addition identities and cancellation-resistant forms of the small
+correction terms. For either real Warp component,
+\begin{align}
+  \sin(t+h)-\sin t
+     &=\cos t\sin h+\sin t(\cos h-1)\notag\\
+     &=\cos t\sin h-2\sin t\sin^2(h/2). \label{eq:warp-delta}
+\end{align}
+Here \(t\) and \(h\) are three times the corresponding reference and
+displacement components. The two corrections, scaled by 0.35, augment
+\(D_2+\eta\). For the complex analytic functions,
+\begin{align}
+  e^{Z+\delta}-e^Z&=e^Z(e^\delta-1),\\
+  \sin(Z+\delta)-\sin Z
+    &=\cos Z\sin\delta+\sin Z(\cos\delta-1).
+\end{align}
+For \(\delta=u+\ii v\), the residual parts are evaluated as
+\begin{align}
+  \Re(e^\delta-1)&=\expmone(u)-2e^u\sin^2(v/2),\\
+  \Im(e^\delta-1)&=e^u\sin v,\\
+  \Re(\cos\delta-1)&=
+    2\big[\sinh^2(v/2)-\sin^2(u/2)\cosh v\big],\\
+  \Im(\cos\delta-1)&=-\sin u\sinh v.
+\end{align}
+The real-part formulas follow by adding and subtracting \(e^u\) or
+\(\cosh v\), then using half-angle identities. The general Studio
+kernel finally adds \(\eta\). These are algebraic constructions from
+standard identities \cite{dlmf}, not new trigonometric results.
+
+\begin{lemma}[Difference of a quotient]\label{lem:quotient}
+If \(Q=A/B\), \(B\ne0\), and \(B+\Delta B\ne0\), then
+\begin{equation}
+  \Delta Q=\frac{\Delta A-Q\Delta B}{B+\Delta B}.
+  \label{eq:quotient}
+\end{equation}
+If \(\abs{\Delta A}\le r_A\) and \(\abs{\Delta B}\le r_B<\abs B\), then
+\begin{equation}
+  \abs{\Delta Q}\le
+  \frac{r_A+\abs Q\,r_B}{\abs B-r_B}.
+  \label{eq:quotient-bound}
+\end{equation}
+\end{lemma}
+\begin{proof}
+\begin{align*}
+  \frac{A+\Delta A}{B+\Delta B}-Q
+    &=\frac{A+\Delta A-QB-Q\Delta B}{B+\Delta B}\\
+    &=\frac{\Delta A-Q\Delta B}{B+\Delta B}.
+\end{align*}
+The numerator is bounded above by \(r_A+\abs Q\,r_B\) by the triangle
+inequality. The reverse triangle inequality bounds the denominator
+below by \(\abs B-r_B>0\).
+\end{proof}
+
+For Newton/Nova take \(A=\theta\) (unit target for Nova), \(B=Z^2\),
+\(\Delta A=0\), and \(\Delta B=D_2\). The difference of the update
+is \((2\delta+\Delta Q)/3\), plus \(\eta\) for Nova. For Magnet use
+\begin{align}
+  A&=Z^2+C-1, & B&=2Z+C-2,\\
+  \Delta A&=D_2+\eta, &\Delta B&=2\delta+\eta,\\
+  \Delta_{\rm Magnet}&=2Q\Delta Q+(\Delta Q)^2 .
+\end{align}
+To tighten the error estimate near a reconstructed pixel, the engine
+uses derivatives in forms that retain cancellation. By the quotient rule,
+\begin{align}
+  \partial_zQ_{\rm Magnet}
+     &=\frac{2zB-2A}{B^2}=\frac{2(z-Q)}{B},\\
+  \partial_cQ_{\rm Magnet}
+     &=\frac{B-A}{B^2}=\frac{1-Q}{B},\\
+  \partial_z[(2z+Q_{\rm Newton})/3]
+     &=\frac{2-2Q_{\rm Newton}/z}{3}
+       =\frac{2(z-Q_{\rm Newton})}{3z}.
+\end{align}
+A denominator whose uncertainty interval approaches zero rejects the
+fast result. Local derivatives can tighten a bound but cannot remove a
+pole or resolve ambiguous convergence by themselves.
+
+\paragraph{Logistic differences.}
+Let \(U,R\) denote the scalar state and parameter of the reference,
+and let the pixel use \(U+\delta,R+\eta\). Expanding before evaluating
+the small terms gives
+\begin{align}
+  \delta_{\rm next}
+    &=(R+\eta)(U+\delta)(1-U-\delta)-RU(1-U)\notag\\
+    &=[R(1-2U)-R\delta]\delta+
+      \eta(U+\delta)(1-U-\delta),\\
+  \Delta f'
+    &=(R+\eta)(1-2(U+\delta))-R(1-2U)\notag\\
+    &=-2R\delta+\eta(1-2(U+\delta)).
+\end{align}
+The fast kernel bounds the log-sum uncertainty and rejects estimates
+whose sign is ambiguous. For a positive lower derivative bound,
+\(\log(1+t)\le t\) for \(t\ge0\) avoids another logarithm when bounding
+the error. The floor \(10^{-15}\) used in the observable still applies.
+
+\subsection{Shared prefixes, delayed state, and fallback}
+
+\paragraph{General linear prefix.}
+Let \(u\in\mathbb R^2\) be the normalized pixel displacement in a
+reference tile. Write \(\delta_n\simeq A_nu\), where \(A_n\) is a
+real \(2\times2\) matrix. The chain rule gives the linearized response
+of a recipe:
+\begin{equation}
+  A_{n+1}=J_{z,n}A_n+J_{c,n}L_n+
+           mA_{n-1}\mathbf1_{\rm Phoenix}. \label{eq:prefix-matrix}
+\end{equation}
+Here \(L_nu\) is the parameter displacement, zero on Julia steps.
+The estimate accumulates the previous error, a second-order remainder
+\(\tfrac12 M_n\|\delta\|^2\), the parameter--state cross term for
+Lambda, and rounding allowances. The code stops the prefix at an
+uncertain fold, an unsafe bailout margin, or excessive relative error
+(threshold \(10^{-11}\) against the local scale). It requires at least
+24 steps. Traps and rational steps disable this prefix because
+intermediate extrema, poles, or convergence can affect the observable.
+
+\paragraph{Phoenix cancellation across steps.}
+For a reconstructed state \(z_n\), let \(\epsilon_n\) denote a small
+state error. A Phoenix step gives
+\begin{align}
+  \epsilon_{n+1}
+    &=2z_n\epsilon_n+m\epsilon_{n-1}
+      +\epsilon_n^2+\text{numerical noise},\\
+  \begin{pmatrix}\epsilon_{n+1}\\\epsilon_n\end{pmatrix}
+    &=
+    \underbrace{\begin{pmatrix}2z_n&m\\1&0\end{pmatrix}}_{T_n}
+    \begin{pmatrix}\epsilon_n\\\epsilon_{n-1}\end{pmatrix}
+    +\begin{pmatrix}\epsilon_n^2+\text{numerical noise}\\0\end{pmatrix}.
+\end{align}
+Taking magnitudes before composing loses correlations. For two steps,
+put \(a_j=2z_j\); the coefficient of the initial current error is
+\begin{align*}
+  (T_1T_0)_{11}&=a_1a_0+m,\\
+  \abs{(T_1T_0)_{11}}&\le\abs{a_1a_0}+\abs m .
+\end{align*}
+For \(a_0=a_1=1/2\), \(m=-1/4\), the left-hand side is zero while
+the triangle bound is \(1/2\). This illustrates cancellation, not a
+benchmark. The implementation composes up to eight consecutive
+Phoenix steps before taking coefficient norms. It propagates nonlinear
+noise separately and keeps the smaller of its two estimates. A
+non-Phoenix step interrupts the block.
+
+\paragraph{Reference policy.}
+General Studio uses \(64\times64\) tiles and a bounded per-worker cache.
+It can retry with a 32-pixel shifted grid, and, for selected formulas
+and sufficient cache budget, \(16\times16\) subtiles. Intermediate
+error limits are \(10^{-5}\) for most steps and \(10^{-3}\) for rational
+steps. Bailout, trap color, convergence, and Lyapunov sign also receive
+decision-specific checks. When accepting a scalar interval, the
+general kernel uses its midpoint only if the width is at most
+\(10^{-6}\). After 64 consecutive tile failures (8 for Lyapunov) it
+temporarily bypasses the fast path for up to 256 pixels.
+For two seeds, both approximate values must be finite. These rules and
+their rounding allowances are engineering acceptance tests, not a
+directed-rounding certificate. See
+\href{../dist/studio-perturbation.js}{\code{studio-perturbation.js}}.
+
+\subsection{Analytic Sine and Exponential Julia}
+
+For eligible Julia recipes, \(c\) is shared and \(f\) is analytic.
+Use a quadratic prefix \(\delta_n=A_nu+B_nu^2+O(u^3)\) with
+\(A_0=R\), \(B_0=0\), and \(\abs u\le1\). Expanding and collecting
+degrees yields
+\begin{align}
+  \delta_{n+1}
+    &=f'(Z_n)\delta_n+\tfrac12f''(Z_n)\delta_n^2
+      +O(\abs{\delta_n}^3),\\
+  A_{n+1}&=f'(Z_n)A_n,\\
+  B_{n+1}&=f'(Z_n)B_n+\tfrac12f''(Z_n)A_n^2 .
+\end{align}
+Here \(f''=-f\) for sine and \(f''=f\) for exp. Put
+\(s_n=\abs{A_n}+\abs{B_n}\), \(D_n=\abs{f'(Z_n)}\) and
+\(L_n=2(\abs{f(Z_n)}+D_n+1)\). The implemented error estimate is
+\begin{align}
+  E_{n+1}
+     &=(D_n+L_n(s_n+E_n))E_n \notag\\
+     &\quad+L_n\big[(2\abs{A_n}+\abs{B_n})\abs{B_n}+s_n^3\big]
+       +\text{rounding allowance}.
+\end{align}
+The mixed expression counts the omitted degrees three and four in
+\((A_nu+B_nu^2)^2\); the cubic term accounts for the local Taylor
+remainder at the scale used by the code.
+
+The \(96\times96\) reference tiles require at least eight prefix steps,
+amplitude below \(10^{-4}\), relative estimated error at most \(10^{-10}\),
+and separation from the bailout. At \(\abs\delta^2\le10^{-8}\) the
+local delta uses a cubic series for sine or exponential and a
+quadratic correction for cosine. Otherwise it uses the identities
+above until \(\abs\delta>0.1\) or the trace ends. It can then continue
+in Float64 from the reconstructed state. An uncertain result triggers
+a reference shifted by 48 pixels, and either a non-ambiguous retry or
+agreement within \(10^{-4}\) in the same class can be accepted.
+Remaining cases use direct evaluation. Agreement is not a proof that
+two approximations are both correct.
+See \href{../dist/analytic-julia.js}{\code{analytic-julia.js}}.
+
+\subsection{Block acceptance and raster reuse}
+
+From \(x\ge7\) on rasters of at least 10,000 pixels, a worker may try
+one orbit for a small block, up to 16 columns and four of its rows.
+The enclosing disk radius is half the distance between the extreme
+sample centers. For \(\abs h\le r\), integrating the derivative gives
+\begin{align}
+  (z+h)^k-z^k&=\int_0^1 k(z+th)^{k-1}h\,dt,\\
+  \abs{(z+h)^k-z^k}&\le k(\abs z+r)^{k-1}r,\\
+  \abs{(z+h)^2-z^2}&\le(2\abs z+r)r .
+\end{align}
+The last line follows directly by factoring the square. Axis folds are
+nonexpansive. Warp's additional derivative has magnitude at most 1.05
+per component. For exponential and sine, the bounds used are based on
+\begin{align}
+  \abs{e^{z+h}-e^z}&\le e^{\Re z+r}r,\\
+  \abs{\cos(a+\ii b)}^2&=\cos^2 a+\sinh^2 b,\\
+  \abs{\sin(z+h)-\sin z}
+    &\le \abs{\cos z}r+\tfrac12\cosh(\abs b+r)r^2.
+\end{align}
+The sine remainder follows from the integral remainder with
+\(f''=-\sin\) and \(\abs{\sin(a+\ii b)}\le\cosh b\).
+The Ring and Cross distances are 1-Lipschitz, so lower and upper
+bounds on their minima come from the per-step intervals. A block is
+filled only when the implementation's decision and scalar error tests
+pass. Otherwise it tries eligible fixed-point block evaluation or
+samples individual pixels. See
+\href{../dist/orbit-bounds.js}{\code{orbit-bounds.js}} and
+\href{../dist/worker.js}{\code{worker.js}}.
+
+The field cache separates scalar orbit results from RGBA. Recoloring
+is \(O(WH)\) without iterating the orbits. Shallow raster planning
+can share a frame with fullscreen; Studio and deep views render at
+viewport size to avoid invisible work. The cache retains up to three
+frames subject to a 96 MiB budget (it keeps at least one frame).
+Progressive passes use strides \(6,2,1\) shallow and \(12,4,1\) deep.
+The latter add approximately \(1/12^2+1/4^2=6.94\%\) to the sample
+count before dimension rounding. Up to four workers interleave rows;
+their reference caches are separate.
+
+When panning by an integer grid displacement with overlap, the
+number of newly evaluated positions follows by subtracting the
+intersection of two rectangles:
+\begin{align}
+  A_{\rm new}
+    &=WH-(W-\abs{d_x})(H-\abs{d_y})\\
+    &=H\abs{d_x}+W\abs{d_y}-\abs{d_xd_y}.
+\end{align}
+Reuse requires the same raster, span, recipe and iteration budget.
+The old grid preserves coordinates for copied samples and carries the
+fractional drag remainder. Large shifts or missing overlap require a
+full render. A deep view also recenters after a cumulative shift beyond
+four raster widths. See
+\href{../dist/render-cache.js}{\code{render-cache.js}}.
+
+\subsection{Fixed-point transcendental evaluation}
+
+The trigonometric kernel uses a quadrant reduction based on Machin's
+identity and a split grid:
+\begin{align}
+  \pi/4&=4\arctan(1/5)-\arctan(1/239),\\
+  r&=j\,2^{-20}+\delta,
+       &0\le\delta<2^{-20},\\
+  j&=2^{10}h+\ell,
+       &j\,2^{-20}&=h\,2^{-10}+\ell\,2^{-20}.
+\end{align}
+The two anchor tables are built on demand. Angle addition composes
+their sine and cosine into a direct-mapped cache of 4,096 entries.
+Horner evaluation uses the Maclaurin correction polynomials
+\begin{align}
+  \sin\delta&=\delta+\delta P_{\sin}(\delta^2),\\
+  \cos\delta&=1+P_{\cos}(\delta^2).
+\end{align}
+Warp requests only one reconstructed component. For exp, range
+reduction and guard precision are
+\begin{align}
+  \ln 2&=2\operatorname{atanh}(1/3),\\
+  t&=k\ln 2+r, &0\le r<\ln2,\\
+  e^t&=2^k e^r,\\
+  b_e&=b+24+\lceil\log_2 b\rceil .
+\end{align}
+Exp uses the same residual grid, composes anchors multiplicatively,
+and applies \(2^k\) with a shift. Complex sine derives \(\cosh b\)
+and \(\sinh b\) from \(e^{\abs b}\) and one reciprocal. Related
+table-based reduction and Taylor evaluation at multiple precision
+were described by Johansson \cite{johansson}; this implementation
+uses its own grid, cache, and operation mix.
+
+Other savings in \href{../dist/precise-formulas.js}{\code{precise-formulas.js}}
+include precomputed Drift tables, no initial square for direct
+Sine/Exp unless tracing, a shift for Phoenix \(m=-1/2\), and early
+termination when a deterministic fixed-point state repeats at a
+checkpoint (single autonomous step, without Phoenix). Ring retains
+the largest squared radius below \(\rho^2\) and the smallest above.
+By monotonicity on each side it needs at most two integer square roots,
+after the orbit rather than on every iteration. The integer root
+update is \(r'\!=\lfloor(r+\lfloor v/r\rfloor)/2\rfloor\).
+Lyapunov keeps the state update fixed-point, but normally forms the
+derivative factor in Float64 and batches at most 16 factors before
+taking a log; it retries with a fixed-point derivative near zero.
+Newton uses \(\abs{z^2}^2=\abs z^4\) on the unrounded square and
+avoids a generic complex numerator for a unit target.
+
+\section{Arithmetic work model}\label{sec:cost}
+
+\subsection{Assumptions and units}
+
+Fix a \(1010\times751\) raster, so \(M=758{,}510\), and a budget
+\(N=200\) per orbit. Count every iteration as a completed, direct
+high-precision step. Cubic Two-Seed has two orbits; Lyapunov adds
+24 warm-up steps. Auto iterations, early termination, region acceptance,
+and perturbation are excluded. Assume warm transcendental anchor
+caches.
+
+For nominal operand widths \(a,b\) and a numerator of \(n\) bits
+divided by a \(d\)-bit denominator, use the schoolbook weights
+\begin{align}
+  M_0(a,b)&=ab,\\
+  D_0(n,d)&=d(n-d),\qquad n>d.
+\end{align}
+They count a rectangular product of digits and roughly \(n-d\)
+quotient positions, respectively. They are not a claim about the
+algorithms or constants of a JavaScript engine \cite{brent}. Ignore
+signs, integer parts, leading zeros, linear operations, small integer
+constants, range reduction with a small quotient, coordinate setup,
+cold caches, and final coloring. Ring's final roots and the near-zero
+Lyapunov second pass are excluded. Large intermediate magnitudes or
+small residuals can change actual operand sizes.
+
+\subsection{Primitive work and transcendental degree}
+
+Three products form the complex square and two more form the squared
+escape norm. Each subsequent complex multiplication adds four.
+Hence for explicit powers and their conjugates,
+\begin{align}
+  n_{\rm mul}(k)&=3+4(k-2)+2,\\
+  C_{\rm power}(b,k)&=[5+4(k-2)]b^2.
+\end{align}
+Folds add sign operations, not full-width products. The division
+weights used below are
+\begin{align*}
+  D_0(2b,b)&=b^2, & D_0(3b,2b)&=2b^2, & D_0(5b,4b)&=4b^2 .
+\end{align*}
+
+\begingroup\tableformat{16}
+\begin{longtable}{@{}L{.24\TW}L{.44\TW}L{.32\TW}@{}}
+\caption{Modeled work per completed direct iteration.}\label{tab:work}\\
+\toprule Path or primitive & Operation inventory & Work\\
+\midrule\endfirsthead
+\toprule Path or primitive & Operation inventory & Work\\\midrule\endhead
+\bottomrule\endlastfoot
+Classic Mandelbrot, Julia, Ship & Five products; two decimal rescaling divisions
+  & \(7b_d^2,\ b_d=d\log_2 10\)\\
+Powers and folds & \(3+4(k-2)\) products for the map; two for the norm
+  & \([5+4(k-2)]b^2\)\\
+Lambda & Five base products; four for the parameter multiplication & \(9b^2\)\\
+Cubic & Five base; four for \(z^2z\); two for \(0.9z\)
+  & \(11b^2\) per seed\\
+Phoenix & Five base; two for generic memory; a shift for \(m=-1/2\)
+  & \(5b^2\) default, \(7b^2\) generic\\
+Newton / Nova & Five base; a \(2b\)-bit square; two \(5b/4b\) divisions;
+  two convergence products for a single step
+  & \(19b^2\) for a single unit-target step; add \(4b^2\) for a
+    generic Newton target; subtract \(2b^2\) in multistep recipes\\
+Magnet & Five base; two for the denominator norm; four for the
+  numerator; two \(3b/2b\) divisions; three for quotient squaring;
+  two for single-step convergence
+  & \(20b^2\) single-step, \(18b^2\) multistep\\
+Ring / Cross & Reuse the orbit's products; extra comparisons and
+  possible roots after the loop & Same modeled loop cost\\
+Lyapunov & Two products per state step; derivative usually Float64
+  & \(2b^2\), over \(N+24\) steps\\
+Warp & Five base; two scaling products; two real sines & \(7b^2+2S_b\)\\
+Exponential & Two output products; two for the norm; sin/cos and exp
+  & \(4b^2+P_b+X_b\)\\
+Sine & As for exponential, plus one reciprocal & \(5b^2+P_b+X_b\)\\
+\end{longtable}
+\endgroup
+
+The rational widths follow from their fixed-point scales. With
+\(U=2^b\), the unrounded Newton square has scale \(U^2\).
+The denominator is \((\widehat a^2+\widehat b^2)^2\) at \(U^4\).
+The unit-target numerator is shifted by \(3b\), from \(U^2\) to
+\(U^5\), so the ratio is scaled by \(U\). With a generic target,
+the complex numerator starts at \(U^3\) and is shifted by \(2b\).
+In Magnet, the squared denominator and raw complex numerator both
+start at \(U^2\); the numerator is shifted by \(b\).
+
+For an argument residual smaller than \(2^{-20}\), the maximum size
+of a degree-\(n\) term in fixed-point units is \(2^{v-20n}/n!\).
+Define the last retained degree by
+\begin{align}
+  K(v)&=\max\{n\ge1:20n+\log_2(n!)\le v\},\\
+  K_t&=K(b), &K_e&=K(b_e).
+\end{align}
+The kernel retains at least the linear term and implements the cutoff
+with the integer test \((2^v\gg20n)\ge n!\) for \(n\ge2\). This
+test is a truncation rule for a term, not a certificate of total
+rounding error.
+
+There are \(K_t-1\) correction coefficients across the sine and
+cosine polynomials. Horner uses one product per correction
+coefficient, including the final factor \(\delta^2\). Add one product
+for \(\delta^2\), one for the remaining sine factor \(\delta\), and
+two per reconstructed component. Exp uses \(K_e\) Horner products
+and one anchor product. Thus, on an anchor cache hit,
+\begin{align}
+  S_b&=[(K_t-1)+1+1+2]b^2=(K_t+3)b^2,\\
+  P_b&=[(K_t-1)+1+1+4]b^2=(K_t+5)b^2,\\
+  X_b&=(K_e+1)b_e^2.
+\end{align}
+An anchor miss costs four additional composition products for trig or
+one for exp; cold component tables add series construction. Stirling's
+formula explains the eventual model scaling:
+\begin{align}
+  20n+\log_2(n!)
+    &=n(20+\log_2 n-\log_2 e)+O(\log n),\\
+  K(v)&=\Theta(v/\log v),\\
+  C_{\rm residual}(b)&=\Theta(b^3/\log b).
+\end{align}
+The last line applies to this residual evaluation and these
+schoolbook weights; it excludes table construction and does not
+describe actual BigInt timing.
+
+\subsection{Recipe totals and worked calculations}
+
+Let \(A_f(k)\) count occurrences of step \(f\) among the first \(k\)
+entries of the expanded word \(S\). Count distinct step settings
+separately when their work differs. For a word of length \(L\) and
+\(q\) seeds, full cycles and the final prefix give
+\begin{align}
+  n_f(N)&=\lfloor N/L\rfloor A_f(L)+A_f(N\bmod L),\\
+  C(x)&=q\sum_f n_f(N)C_f(b(x,W)),\\
+  G(x)&=100\left[\frac{C(x+1)}{C(x)}-1\right].
+\end{align}
+Multiply \(C(x)\) by \(M\) for a fully direct final frame. Use
+\(N+24\) for Lyapunov. For a fixed operation mix in binary, with
+\(A=x+\log_{10}W+32\),
+\begin{align}
+  \frac{C(x+1)}{C(x)}
+    &=\left(\frac{b(x+1,W)}{b(x,W)}\right)^2,\\
+  \frac{G(x)}{100}
+    &\approx\left(\frac{A+1}{A}\right)^2-1
+     =\frac{2}{A}+\frac{1}{A^2}
+     \quad\text{(ignoring the bit ceiling)}.
+\end{align}
+For the classic path, start at \(d=40\) and increase \(x\) by
+integer decades with \(s=3.3\,10^{-x}\):
+\begin{align}
+  d(x)&=40+20\max\{0,\lceil(x+24-40)/20\rceil\},\\
+  \frac{C(17)}{C(16)}&=(60/40)^2=2.25.
+\end{align}
+For integer \(x\), the scaled span has at least 25 digits when
+\(d-x\ge24\), which yields the first line. A manually entered or
+previously deeper view can retain a larger \(d\).
+
+\begingroup\tableformat{40}
+\begin{longtable}{@{}R{.15\TW}R{.17\TW}R{.17\TW}R{.17\TW}R{.17\TW}R{.17\TW}@{}}
+\caption{Precision and retained degrees at selected magnifications.}\label{tab:bits}\\
+\toprule \(x\) & Classic \(d\) & Studio \(b\) & Exp \(b_e\) & \(K_t\) & \(K_e\)\\
+\midrule\endfirsthead
+\toprule \(x\) & Classic \(d\) & Studio \(b\) & Exp \(b_e\) & \(K_t\) & \(K_e\)\\\midrule\endhead
+\bottomrule\endlastfoot
+12 & 40 & 157 & 189 & 7 & 8\\
+13 & 40 & 160 & 192 & 7 & 8\\
+14 & 40 & 163 & 195 & 7 & 8\\
+15 & 40 & 167 & 199 & 7 & 9\\
+16 & 40 & 170 & 202 & 7 & 9\\
+17 & 60 & 173 & 205 & 7 & 9\\
+18 & 60 & 177 & 209 & 8 & 9\\
+40 & 80 & 250 & 282 & 11 & 12\\
+41 & 80 & 253 & 285 & 11 & 12\\
+100 & 140 & 449 & 482 & 19 & 20\\
+101 & 140 & 452 & 485 & 19 & 20\\
+\end{longtable}
+\endgroup
+
+\paragraph{Quadratic Studio.}
+The common baseline and two growth factors are
+\begin{align*}
+  C_{z^2}(12)&=200\cdot5\cdot157^2=24{,}649{,}000,\\
+  C_{z^2}(13)/C_{z^2}(12)&=(160/157)^2\approx1.03858,\\
+  C_{z^2}(100)/C_{z^2}(12)&=(449/157)^2\approx8.17887.
+\end{align*}
+A seventh power uses \(25\) products rather than \(5\) per step, but
+has the same relative growth.
+
+\paragraph{Warp.}
+At the two endpoints, the direct work per iteration is
+\begin{align*}
+  C_{\rm Warp}(12)/N&=[7+2(7+3)]157^2=27\cdot157^2,\\
+  C_{\rm Warp}(100)/N&=[7+2(19+3)]449^2=51\cdot449^2,\\
+  C_{\rm Warp}(100)/C_{\rm Warp}(12)
+    &=(51/27)(449/157)^2\approx15.45 .
+\end{align*}
+The degree change from \(x=17\) to \(18\) gives
+\((29/27)(177/173)^2\approx1.1243\).
+
+\paragraph{Mixed Drift \(z^3\) and Warp.}
+There are \(50\) cubic steps and \(150\) Warp steps at \(N=200\):
+\begin{align*}
+  n_{\sin}&=2\cdot150=300\quad\text{per direct pixel},\\
+  C_{\rm mix}(12)&=(50\cdot9+150\cdot27)157^2\\
+    &=110{,}920{,}500,\\
+  M C_{\rm mix}(12)&=84{,}134{,}308{,}455{,}000,\\
+  M n_{\sin}&=227{,}553{,}000,\\
+  C_{\rm mix}(100)/C_{\rm mix}(12)
+    &=(8{,}100/4{,}500)(449/157)^2\approx14.72 .
+\end{align*}
+The frame totals are conditional on every pixel taking the full direct
+route. For a separate scenario with a mean of 117 Warp steps per
+direct pixel and a \(320\times200\) entirely direct raster, the same
+calculation gives \(2\cdot117\cdot320\cdot200=14{,}976{,}000\) sines.
+That is a conditional extrapolation, not a frame-wide counter.
+
+\paragraph{Sine Julia and Exponential Julia.}
+For Sine Julia, substitute \(b_e\) as well as \(b\):
+\begin{align*}
+  C_{\rm Sine}(12)/N
+    &=[5+(7+5)]157^2+(8+1)189^2=740{,}522,\\
+  C_{\rm Sine}(100)/N
+    &=[5+(19+5)]449^2+(20+1)482^2=10{,}725{,}233,\\
+  C_{\rm Sine}(100)/C_{\rm Sine}(12)&\approx14.48334 .
+\end{align*}
+Exponential replaces the leading \(5\) with \(4\) by omitting the
+reciprocal, yielding a ratio of approximately \(14.70042\).
+
+\section{Results and reproducibility}\label{sec:results}
+
+\subsection{Modeled results by family}
+
+Table~\ref{tab:growth} groups presets with the same sampled decade
+growth. Appendix~\ref{sec:catalog} gives all 52 individual presets
+and the running recipe. All numbers are work ratios at fixed budgets
+for the direct path; zero growth for a classic decade means \(d\)
+did not change in that decade.
+
+\begingroup\tableformat{40}
+\begin{longtable}{@{}L{.39\TW}R{.11\TW}R{.11\TW}R{.11\TW}R{.11\TW}R{.17\TW}@{}}
+\caption{Percent growth for selected zoom decades and the total work ratio.}\label{tab:growth}\\
+\toprule Group & \(G(12)\) & \(G(16)\) & \(G(40)\) & \(G(100)\) & \(C(100)/C(12)\)\\
+\midrule\endfirsthead
+\toprule Group & \(G(12)\) & \(G(16)\) & \(G(40)\) & \(G(100)\) & \(C(100)/C(12)\)\\\midrule\endhead
+\bottomrule\endlastfoot
+Six classic presets & 0\% & 125.00\% & 0\% & 0\% & 12.25\\
+Forty Studio presets with a fixed operation mix & 3.86\% & 3.56\% & 2.41\% & 1.34\% & 8.18\\
+Warp & 3.86\% & 3.56\% & 2.41\% & 1.34\% & 15.45\\
+Singularity / Drift Singularity & 3.86\% & 3.56\% & 2.41\% & 1.34\% & 12.98 / 14.31\\
+Kaleidoscope & 3.86\% & 3.56\% & 2.41\% & 1.34\% & 11.86\\
+Exponential Julia & 3.56\% & 3.29\% & 2.29\% & 1.30\% & 14.70\\
+Sine Julia & 3.57\% & 3.30\% & 2.29\% & 1.30\% & 14.48\\
+Mixed Drift \(z^3\) and Warp & 3.86\% & 3.56\% & 2.41\% & 1.34\% & 14.72\\
+\end{longtable}
+\endgroup
+
+\subsection{Archived frame latency}
+
+The measured frame includes setup, reference traces, block attempts,
+per-pixel retries, direct fallbacks, and output. An accounting model
+for one worker is
+\begin{align}
+  T_{\rm worker}
+    &\simeq T_{\rm setup}+\sum_t T_{{\rm ref},t}
+                      +\sum_B T_{{\rm block},B} \notag\\
+    &\quad+\sum_i T_{{\rm try},i}
+       +\sum_{i\in F}\sum_{n<N_i} t_{{\rm direct},f_n}(b)
+       +T_{\rm transfer}.
+\end{align}
+Here \(F\) is the set of direct fallback pixels, \(N_i\) is actual
+iteration work, and \(t\) is a time, unlike \(C_f\). The slowest
+worker in each pass, assembly and coloring affect visible latency.
+When enabled, Auto iterations additionally increase the budget:
+\begin{align*}
+  N_{\rm auto}
+    &=100\,\operatorname{round}\!\left(
+               \frac{600+170\max(0,x-2)}{100}\right),\\
+  N&=\max(N_{\rm chosen},\min(20{,}000,N_{\rm auto})).
+\end{align*}
+
+Table~\ref{tab:frames} uses archived \(1010\times751\) views with
+four workers and one run per view. The renderer ran in Node and
+timings include worker startup, progressive passes, assembly and RGBA,
+but not page load or browser painting. The raw records retain exact
+state: \href{data/zoom-detail-1010x751-warp11-warpLink-warp14.json}{Warp}
+and \href{data/zoom-detail-1010x751-mandel18-mandelUser-mini12-mini18-mini40-mini100.json}{Mandelbrot}.
+The Warp rows share a center; the mini-Mandelbrot rows use different
+centers selected for visible structure.
+
+The visibility filter bins each color channel into eight levels.
+A bin is significant at a share of at least \(1\%\), and a tile in
+a \(12\times8\) grid is varied if it has at least three bins. An edge
+is a horizontal or vertical neighbor pair with a channel difference
+of at least 24. Selection required at least three significant bins,
+at most \(90\%\) in the largest bin, at least 24 varied tiles, and
+an edge share of at least \(0.2\%\). Background means the exact
+RGB value \((10,14,25)\). Neither edge share nor background measures
+fallback rate or iteration count.
+
+\begingroup\tableformat{48}
+\begin{longtable}{@{}L{0.29\TW}R{0.12\TW}R{0.08\TW}R{0.115\TW}R{0.115\TW}R{0.14\TW}R{0.14\TW}@{}}
+\caption{Archived frame timings and image detail metrics. Each row represents one run.}\label{tab:frames} \\
+\toprule
+View & Zoom \(x\) & Budget & Preview (s) & Final (s) & Background & Edges \\
+\midrule
+\endfirsthead
+\toprule
+View & Zoom \(x\) & Budget & Preview (s) & Final (s) & Background & Edges \\
+\midrule
+\endhead
+\midrule
+\multicolumn{7}{r@{}}{\footnotesize Continued on the next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+Mixed Warp (wider view) & 11.00000 & 200 & 0.143 & 2.374 & 7.20\% & 29.79\% \\
+Mixed Warp (study view) & 11.44672 & 200 & 1.220 & 102.087 & 11.79\% & 32.34\% \\
+Mixed Warp (narrower view) & 14.00000 & 200 & 1.127 & 97.558 & 5.44\% & 11.85\% \\
+Mandelbrot (same center) & 18.00000 & 3000 & 0.123 & 3.813 & 0.00\% & 37.75\% \\
+Mandelbrot (same center) & 20.50389 & 3000 & 0.096 & 2.346 & 0.00\% & 17.67\% \\
+Mini-Mandelbrot & 11.52169 & 3000 & 0.084 & 1.502 & 15.87\% & 14.95\% \\
+Mini-Mandelbrot & 17.54229 & 3000 & 0.087 & 1.406 & 15.99\% & 18.12\% \\
+Mini-Mandelbrot & 40.11954 & 3000 & 0.088 & 1.868 & 16.47\% & 23.47\% \\
+Mini-Mandelbrot & 99.92803 & 3000 & 0.128 & 4.149 & 18.78\% & 32.62\% \\
+\end{longtable}
+\endgroup
+
+The wider Warp frame lies just below the strict \(x>11\) threshold
+in the stored state; the additional Float64 resolution test is false.
+The next row enters the deep route. The roughly \(43\times\) change
+cannot be attributed to a few extra bits. The \(x=14\) Warp frame
+then finishes earlier than the \(x\approx11.45\) frame. These are
+observations for the selected views, not a fitted latency law.
+
+\subsection{Historical optimization comparisons}
+
+The \href{data/fractalia-render-optimizations.json}{optimization archive}
+records \(320\times200\), \(N=200\), one-worker comparisons. A row
+uses the same view before and after, but the archive does not pin a
+common pair of revisions across all rows. Some controls already
+included trig improvements. These are descriptive development
+measurements, not single-optimization ablations or a comparison
+against competing engines.
+
+\begingroup\tableformat{32}
+\begin{longtable}{@{}L{0.26\TW}R{0.15\TW}R{0.15\TW}R{0.22\TW}R{0.22\TW}@{}}
+\caption{Historical before--after timings and direct evaluations in the final pass.}\label{tab:comparisons} \\
+\toprule
+Case & Before (s) & After (s) & Direct before & Direct after \\
+\midrule
+\endfirsthead
+\toprule
+Case & Before (s) & After (s) & Direct before & Direct after \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r@{}}{\footnotesize Continued on the next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+Cubic Two-Seed & 21.963 & 1.877 & 63,875 & 274 \\
+Phoenix & 8.312 & 5.461 & 64,000 & 32,670 \\
+Magnet & 29.401 & 20.176 & 64,000 & 37,352 \\
+Nova & 27.190 & 22.722 & 64,000 & 54,172 \\
+Sine (parameter plane) & 58.976 & 12.576 & 55,319 & 12,184 \\
+Ring & 4.834 & 3.348 & 35,157 & 35,157 \\
+Lyapunov & 5.147 & 3.754 & 64,000 & 64,000 \\
+Lyapunov (deep) & 6.258 & 4.799 & 63,999 & 63,999 \\
+\end{longtable}
+\endgroup
+
+The archive records no switch between \(V=N\) and \(V\ne N\) in
+these comparisons. The maximum scalar difference was below
+\(1.3\times10^{-11}\). This is not bitwise equivalence in general.
+The archive also records a negative trial: a reciprocal plus
+correction preserved the field for Nova and Magnet in the tests but
+did not reduce runtime; it was not retained.
+
+\subsection{Reproduction and limitations}
+
+The following commands reproduce the operation tables, rerun selected
+views on the current engine, and check the implementation:
+\begin{Verbatim}[fontsize=\small]
+node scripts/fractal-cost-model.mjs --csv
+node scripts/fractal-cost-model.mjs --decades
+node scripts/benchmark-paper.mjs mini12 3
+node scripts/check.mjs
+\end{Verbatim}
+The cost script reads the live catalog and checks classic precision
+against \code{ensurePrecision}. It emits 53 recipe summaries and
+4,823 recipe--depth records across \(10^{11}\) to \(10^{101}\).
+The benchmark script reads the saved views and records all repetitions
+and the current environment. The tests cover direct versus accelerated
+fields, shuffled recipes, very deep coordinates, pan strips, and
+palette/cache behavior. The accepted numerical tolerances are route
+dependent. The direct evaluator is itself quantized.
+
+Stronger performance evidence would pin all baselines, isolate each
+optimization, collect fallback fractions, orbit-length histograms and
+anchor-cache misses, stratify scenes by texture and numerical
+conditioning, and report dispersion over repetitions. Numerical
+validation should also compare to an independent multiprecision or
+ball-arithmetic evaluator and distinguish class errors from scalar
+differences. Nothing in the existing archive establishes superiority
+to an external renderer.
+
+\section{Prior art and contribution assessment}\label{sec:prior}
+
+\subsection{Search scope}
+
+The accompanying \href{literature-review.md}{search and evidence log}
+records queries, primary sources, and unresolved comparisons. The
+public search was conducted on 12 November 2026 and covered papers,
+preprints, publisher pages, author notes, software manuals, and
+public renderer repositories. Searches combined numerical methods
+with fractal names and alternate spellings. A match was treated as
+method-level evidence only if the source described the relevant
+evaluation path, rather than merely listing a fractal in its catalog.
+This was a broad public prior-art search, not an exhaustive priority
+or patent determination. Unindexed forum archives, proprietary
+implementations, and inaccessible source versions remain gaps.
+
+\subsection{What has clear precedent}
+
+\textbf{Perturbation, prefixes, rebasing, and browser deployment.}
+Martin and Khashin describe shared reference orbits for Mandelbrot;
+Heiland-Allen documents rebasing and block linear approximations
+\cite{martin,khashin,heiland}. Fraktaler~3 explicitly loops editable
+formula lines, supports folds and a small opcode language, and
+implements perturbation and BLA for hybrid fractals
+\cite{fraktaler}. Kalles Fraktaler is another concrete precedent for
+folded and hybrid perturbation \cite{kf}. Ultra Fractal gives authors
+an explicit interface for formula-specific perturbation equations
+\cite{ultrafractal}. Other implementations use hybrid bytecode,
+matrix linear approximations, and a double-double tier
+\cite{fractall}. Browser-based high-precision reference orbits
+combined with GPU perturbation are also documented. In particular,
+Deck describes exact scaled recurrences for Phoenix, Nova, Magnet,
+and other maps, and extended-exponent pixel differences \cite{deck}.
+Mandelbrot Scout independently documents Phoenix perturbation and
+the difficulty of reusing ordinary Mandelbrot rebasing for delayed
+state \cite{scout}.
+Fractalia cannot claim priority for hybrid formulas, formula-aware
+perturbation, linear skipping, browser deep zoom, or the application
+of reference differences to those named families.
+
+\textbf{Arithmetic and region shortcuts.}
+Dekker's multilength floating-point arithmetic predates the
+double-double recovery path \cite{dekker}. Johansson describes
+multiple-precision sine, cosine, and exp using table-based argument
+reduction and Taylor evaluation \cite{johansson}. Multiprecision
+ball arithmetic provides a stronger enclosure framework than the
+floating-point margins used here \cite{arb}. Taking norms after
+composing linear responses is standard linear algebra; the broader
+problem of losing correlations in enclosure propagation is also
+well known in validated numerics \cite{makino}. Mariani--Silver
+illustrates prior region reuse based on rectangular borders
+\cite{mariani}. Fractalia's block predicate instead propagates a
+local disk and checks the observable, and its Float64 margins do not
+constitute certified intervals. Orbit traps also predate this
+implementation \cite{traps}.
+
+\subsection{What this report contributes}
+
+\textbf{A concrete, inspectable integration.}
+Fractalia applies a single recipe interface to folded powers,
+transcendental steps, rational steps, and delayed Phoenix state, with
+a separate mode for the forced Lyapunov observable. Julia and Drift
+are per-step settings. The renderer adapts its metadata, tile policy,
+prefix eligibility, error tests, and fallback to those settings.
+That is an engineering contribution about this implementation, not
+proof that no other renderer supports the same combination.
+
+\textbf{An engine-specific result.}
+The full-budget operation inventory and decade-by-decade ratios are
+computed from Fractalia's code, including its precision transitions
+and residual polynomial cutoffs. The 52-preset table, the mixed
+Warp decomposition, and the archived frame comparisons are
+reproducible artifacts or documented observations of this project.
+They are not new theorems about fractals or comparative speed claims.
+
+\textbf{Candidates for further investigation.}
+Fractall's \href{https://github.com/habib256/fractall-rust/blob/main/src/fractal/lyapunov.rs}{Lyapunov implementation}
+already has a direct multiprecision evaluator. Its
+\href{https://github.com/habib256/fractall-rust/blob/main/src/fractal/bytecode/compile.rs}{hybrid compiler}
+excludes Lyapunov and several special orbit families from that
+bytecode route; this says nothing about every separate route in the
+project. The most specific candidates here are the eight-step cancellation-aware
+Phoenix acceptance policy, the local pole-aware derivative bounds
+for rational steps, and a Lyapunov reference kernel whose decision
+includes uncertainty in the observable's sign. We found neighboring
+techniques and renderers listing these families, but did not verify an
+equivalent implementation of those exact \emph{acceptance} policies in the sources
+reviewed. That limited negative result does not establish priority:
+the identities follow from standard algebra, and catalogs are not
+complete documentation of numerical paths. A stronger paper would
+isolate each policy against a well-defined baseline, validate
+against an independent reference, and compare to the closest
+available implementations on matched scenes.
+
+\subsection{Documentation and materials}
+
+Source code, state fixtures, arithmetic scripts, and historical raw
+results are in the repository. This report is a technical draft; it
+does not assign personal authorship or imply submission approval.
+The evidence review and editorial structure used the Scientific
+Writing skill as guidance \cite{skills}; the skill is not evidence
+for any mathematical or performance claim.
+
+\begingroup\small
+\begin{thebibliography}{99}
+\setlength{\itemsep}{1pt}
+\phantomsection\addcontentsline{toc}{section}{References}
+\bibitem{julia} G. Julia. \href{https://www.numdam.org/item/JMPA_1918_8_1__47_0/}{M\'emoire sur l'it\'eration des fonctions rationnelles}. \emph{Journal de Math\'ematiques Pures et Appliqu\'ees}, 1:47--245, 1918.
+\bibitem{mandelbrot} B. B. Mandelbrot. \href{https://doi.org/10.1111/j.1749-6632.1980.tb29690.x}{Fractal aspects of the iteration of \(z\mapsto\lambda z(1-z)\) for complex \(\lambda\) and \(z\)}. \emph{Annals of the New York Academy of Sciences}, 357:249--259, 1980.
+\bibitem{ship} M. Michelitsch and O. E. R\"ossler. \href{https://doi.org/10.1016/0097-8493(92)90032-Q}{The \textquotedblleft{}burning ship\textquotedblright{} and its quasi-Julia sets}. \emph{Computers \& Graphics}, 16(4):435--438, 1992.
+\bibitem{hubbard} J. Hubbard, D. Schleicher, and S. Sutherland. \href{https://pi.math.cornell.edu/~hubbard/NewtonInventiones.pdf}{How to find all roots of complex polynomials by Newton's method}. \emph{Inventiones Mathematicae}, 146:1--33, 2001.
+\bibitem{vepstas} L. Vepstas. \href{https://linas.org/art-gallery/escape/escape.html}{Renormalizing the Mandelbrot Escape}. Technical note, 1997.
+\bibitem{markus} M. Markus and B. Hess. \href{https://doi.org/10.1016/0097-8493(89)90019-8}{Lyapunov exponents of the logistic map with periodic forcing}. \emph{Computers \& Graphics}, 13(4):553--558, 1989.
+\bibitem{martin} K. I. Martin. \href{https://web.archive.org/web/20160408070057/http://superfractalthing.co.nf/sft_maths.pdf}{SuperFractalThing Maths}. Archived technical note, 2013.
+\bibitem{khashin} S. Khashin. \href{https://math.ivanovo.ac.ru/dalgebra/Khashin/man2/Mandelbrot.pdf}{Fast calculation of the Mandelbrot set with infinite resolution}. Preprint, 2016.
+\bibitem{heiland} C. Heiland-Allen. \href{https://mathr.co.uk/blog/2021-05-14_deep_zoom_theory_and_practice.html}{Deep zoom theory and practice}. Technical note, 2021.
+\bibitem{fraktaler} C. Heiland-Allen. \href{https://fraktaler.mathr.co.uk/}{Fraktaler 3.1 manual}. See Formula Window and the algorithm notes.
+\bibitem{kf} K. Runmo and contributors. \href{https://mathr.co.uk/kf/manual.html}{Kalles Fraktaler 2+ manual}. See the hybrid formula and perturbation documentation.
+\bibitem{ultrafractal} Ultra Fractal. \href{https://www.ultrafractal.com/help/writing/formulas/perturbationequations.html}{Perturbation equations}. Formula-writing manual.
+\bibitem{fractall} Fractall contributors. \href{https://github.com/habib256/fractall-rust}{Fractall: Fractal Explorer in Rust}. Project documentation, accessed 12 November 2026.
+\bibitem{deck} C. Deck. \href{https://www.charlesdeck.com/blog/2026-05-09-fractal-webgpu-explorer}{Fractal Explorer: Deep Zoom in the Browser}. Author's technical note, 2026.
+\bibitem{scout} Mandelbrot Scout contributors. \href{https://github.com/grubertw/mandelbrot_scout}{Mandelbrot Scout}, version 3.4 alternative-formula notes. Public project documentation.
+\bibitem{dekker} T. J. Dekker. \href{https://doi.org/10.1007/BF01397083}{A floating-point technique for extending the available precision}. \emph{Numerische Mathematik}, 18:224--242, 1971.
+\bibitem{dlmf} NIST. \emph{Digital Library of Mathematical Functions}. \href{https://dlmf.nist.gov/4.2}{Exponential and logarithm}, \href{https://dlmf.nist.gov/4.19}{trigonometric series}, and \href{https://dlmf.nist.gov/4.28}{hyperbolic functions}.
+\bibitem{brent} R. P. Brent and P. Zimmermann. \href{https://arxiv.org/abs/1004.4710}{Modern Computer Arithmetic}. Version 0.5.1, 2010.
+\bibitem{johansson} F. Johansson. \href{https://arxiv.org/abs/1410.7176}{Efficient implementation of elementary functions in the medium-precision range}. Preprint revised 2015.
+\bibitem{arb} F. Johansson. \href{https://arxiv.org/abs/1611.02831}{Arb: Efficient Arbitrary-Precision Midpoint-Radius Interval Arithmetic}. \emph{IEEE Transactions on Computers}, 2017.
+\bibitem{makino} M. Berz and K. Makino. \href{https://www.bmtdynamics.org/pub/papers/TMCPO6/TMCPO6.pdf}{New approaches for the validation of transfer maps using remainder-enhanced differential algebra}. \emph{Nuclear Instruments and Methods in Physics Research A}, 519:53--62, 2004.
+\bibitem{mariani} R. Mariani. \href{https://ricomariani.medium.com/the-mariani-silver-algorithm-for-drawing-the-mandelbrot-set-a71e31bc20b6}{The Mariani-Silver Algorithm for Drawing the Mandelbrot Set}. Author's retrospective.
+\bibitem{traps} Ultra Fractal. \href{https://www.ultrafractal.com/help/coloring/standard/orbittraps.html}{Orbit Traps}. Standard coloring manual.
+\bibitem{skills} T. Kassis, V. Agarwal, Y. He, D. Patel, and A. M. Brueckner. \href{https://arxiv.org/abs/2609.00065}{Scientific Agent Skills: A Library of Procedural Knowledge for Research Agents}. Preprint, 2026.
+\end{thebibliography}
+\endgroup
+
+\clearpage
+\appendix
+\section{Results for every preset}\label{sec:catalog}
+
+The first three rows are the original presets, followed by the Studio
+catalog and the running recipe. Formula constants, seeds, and
+modifiers are available in
+\href{../dist/catalog.js}{\code{catalog.js}} and
+\href{../dist/app.js}{\code{app.js}}. The work at \(10^{12}\) is
+relative to the quadratic Studio baseline. Calls are reported as
+single-component sine / sine--cosine pairs / exponential, per pixel
+at the full modeled budget.
+
+\begingroup\tableformat{48}
+\begin{longtable}{@{}L{0.2\TW}L{0.085\TW}L{0.232\TW}R{0.09\TW}R{0.139\TW}R{0.132\TW}R{0.122\TW}@{}}
+\caption{Modeled direct work for every preset and the mixed study recipe.}\label{tab:catalog} \\
+\toprule
+Preset & Path & Recipe & Steps per pixel & Relative work at \(10^{12}\) & \(\frac{C(100)}{C(12)}\) & Calls per pixel \\
+\midrule
+\endfirsthead
+\toprule
+Preset & Path & Recipe & Steps per pixel & Relative work at \(10^{12}\) & \(\frac{C(100)}{C(12)}\) & Calls per pixel \\
+\midrule
+\endhead
+\midrule
+\multicolumn{7}{r@{}}{\footnotesize Continued on the next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+Seahorse Valley & Classic & mandelbrot & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Julia’s Garden & Classic & julia & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Burning Shores & Classic & ship & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Multibrot z\textsuperscript{3} & Studio & z3 & 200 & 1.80 & 8.18 & \mbox{0/0/0} \\
+Multibrot z\textsuperscript{4} & Studio & z4 & 200 & 2.60 & 8.18 & \mbox{0/0/0} \\
+Multibrot z\textsuperscript{5} & Studio & z5 & 200 & 3.40 & 8.18 & \mbox{0/0/0} \\
+Multibrot z\textsuperscript{6} & Studio & z6 & 200 & 4.20 & 8.18 & \mbox{0/0/0} \\
+Multibrot z\textsuperscript{7} & Studio & z7 & 200 & 5.00 & 8.18 & \mbox{0/0/0} \\
+Julia Dendrite & Classic & z2+Julia & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Julia Snowflake & Studio & z5+Julia & 200 & 3.40 & 8.18 & \mbox{0/0/0} \\
+Tricorn & Studio & tricorn & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Multicorn z\textsuperscript{3} & Studio & multi3 & 200 & 1.80 & 8.18 & \mbox{0/0/0} \\
+Multicorn z\textsuperscript{4} & Studio & multi4 & 200 & 2.60 & 8.18 & \mbox{0/0/0} \\
+Multicorn z\textsuperscript{5} & Studio & multi5 & 200 & 3.40 & 8.18 & \mbox{0/0/0} \\
+Celtic & Studio & celtic & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Buffalo & Studio & buffalo & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Perpendicular Ship & Studio & perpendicular & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Heart & Studio & heart & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Warp & Studio & warp & 200 & 5.40 & 15.45 & \mbox{400/0/0} \\
+Phoenix & Studio & phoenix+Julia & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Lambda & Studio & lambda & 200 & 1.80 & 8.18 & \mbox{0/0/0} \\
+Cubic Two-Seed & Studio & cubic & 400 & 4.40 & 8.18 & \mbox{0/0/0} \\
+Elephant Valley & Classic & z2 & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Ship Armada & Classic & ship & 200 & 1.00 & 12.25 & \mbox{0/0/0} \\
+Orbit Rings & Studio & z2 & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Orbit Cross & Studio & z2+Julia & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Fractaloid & Studio & z3 \(\to\) tricorn\(\times\)2 \(\to\) z2 & 200 & 1.20 & 8.18 & \mbox{0/0/0} \\
+Mirror Ship & Studio & ship\(\times\)2 \(\to\) tricorn & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Pulse & Studio & z2\(\times\)4 \(\to\) z5 & 200 & 1.48 & 8.18 & \mbox{0/0/0} \\
+Singularity & Studio & warp \(\to\) celtic \(\to\) z3 & 200 & 2.74 & 12.98 & \mbox{134/0/0} \\
+Chainmail & Studio & celtic \(\to\) buffalo \(\to\) z2\(\times\)3 & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Kaleidoscope & Studio & z3+Julia \(\to\) multi5+Julia \(\to\) warp+Julia & 200 & 3.52 & 11.86 & \mbox{132/0/0} \\
+Drift Julia & Studio & z2+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Seahorse & Studio & z2+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Tricorn & Studio & tricorn+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Cubic & Studio & z3+Julia+Drift & 200 & 1.80 & 8.18 & \mbox{0/0/0} \\
+Drift Dendrite & Studio & z2+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Snowflake & Studio & z5+Julia+Drift & 200 & 3.40 & 8.18 & \mbox{0/0/0} \\
+Drift Heart & Studio & heart+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Phoenix & Studio & phoenix+Julia+Drift & 200 & 1.00 & 8.18 & \mbox{0/0/0} \\
+Drift Fractaloid & Studio & z3+Julia+Drift \(\to\) tricorn+Julia & 200 & 1.40 & 8.18 & \mbox{0/0/0} \\
+Drift Singularity & Studio & warp+Julia+Drift \(\to\) celtic+Julia & 200 & 3.20 & 14.31 & \mbox{200/0/0} \\
+Drift Pulse & Studio & z2+Julia+Drift \(\to\) z5+Julia & 200 & 2.20 & 8.18 & \mbox{0/0/0} \\
+Drift Multicorn & Studio & multi5+Julia+Drift & 200 & 3.40 & 8.18 & \mbox{0/0/0} \\
+Newton Basins & Studio & newton & 200 & 3.80 & 8.18 & \mbox{0/0/0} \\
+Nova & Studio & nova & 200 & 3.80 & 8.18 & \mbox{0/0/0} \\
+Nova Jellyfish & Studio & nova+Julia & 200 & 3.80 & 8.18 & \mbox{0/0/0} \\
+Magnet & Studio & magnet & 200 & 4.00 & 8.18 & \mbox{0/0/0} \\
+Exponential Julia & Studio & exp+Julia & 200 & 5.81 & 14.70 & \mbox{0/200/200} \\
+Sine Julia & Studio & sine+Julia & 200 & 6.01 & 14.48 & \mbox{0/200/200} \\
+Lyapunov & Studio & AABAB & 224 & 0.45 & 8.18 & \mbox{0/0/0} \\
+Lyapunov Braid & Studio & ABBABAAB & 224 & 0.45 & 8.18 & \mbox{0/0/0} \\
+Drift z\textsuperscript{3} \(\to\) Warp \(\times\)3 & Studio & z3+Julia+Drift \(\to\) warp\(\times\)3 & 200 & 4.50 & 14.72 & \mbox{300/0/0} \\
+\end{longtable}
+\endgroup
+
+\end{document}

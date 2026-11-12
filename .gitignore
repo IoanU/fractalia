@@ -7,3 +7,9 @@ Thumbs.db
 .openai/
 .sites-checkout/
 .sites-runtime/
+
+# Technical paper build intermediates
+/docs/fractalia-deep-zoom-rendering.aux
+/docs/fractalia-deep-zoom-rendering.out
+/docs/fractalia-deep-zoom-rendering.toc
+/docs/fractalia-deep-zoom-rendering.synctex.gz

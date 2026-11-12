@@ -1,0 +1,200 @@
+[
+  {
+    "key": "warp11",
+    "state": {
+      "name": "Warp 10^11",
+      "span": "33000000000000000000000000000000000000000000000000",
+      "digits": 60,
+      "cx": "-559869252718645089372536701152417370819700000000000000000000",
+      "cy": "-432148836817102080070459380319221978657500000000000000000000",
+      "iterations": 200,
+      "type": "studio",
+      "recipe": {
+        "mode": "orbit",
+        "seed": "auto",
+        "coloring": "escape",
+        "trap": 0.5,
+        "memory": -0.5,
+        "sequence": "AABAB",
+        "steps": [
+          {
+            "formula": "z3",
+            "repeat": 1,
+            "julia": true,
+            "re": -0.23,
+            "im": 0.53,
+            "drift": true,
+            "amplitude": 0.08,
+            "period": 13
+          },
+          {
+            "formula": "warp",
+            "repeat": 3,
+            "julia": false,
+            "re": -0.745,
+            "im": 0.186,
+            "drift": false,
+            "amplitude": 0.03,
+            "period": 12
+          }
+        ]
+      },
+      "palette": "ember",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false
+    },
+    "log": 10.999999999999996,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 2373.5930000000003,
+    "previewMs": 142.7142,
+    "mediumMs": 609.7305,
+    "reps": 1,
+    "trialsMs": [
+      2373.5930000000003
+    ],
+    "quality": {
+      "significantGroups": 15,
+      "dominantShare": 0.34922413679450504,
+      "variedTiles": 95,
+      "edgeShare": 0.29787448878376566,
+      "backgroundShare": 0.07199377727386587,
+      "detailed": true
+    }
+  },
+  {
+    "key": "warpLink",
+    "state": {
+      "name": "Warp din link",
+      "span": "11797510464620324347466635457400000000000000000000",
+      "digits": 60,
+      "cx": "-559869252718645089372536701152417370819700000000000000000000",
+      "cy": "-432148836817102080070459380319221978657500000000000000000000",
+      "iterations": 200,
+      "type": "studio",
+      "recipe": {
+        "mode": "orbit",
+        "seed": "auto",
+        "coloring": "escape",
+        "trap": 0.5,
+        "memory": -0.5,
+        "sequence": "AABAB",
+        "steps": [
+          {
+            "formula": "z3",
+            "repeat": 1,
+            "julia": true,
+            "re": -0.23,
+            "im": 0.53,
+            "drift": true,
+            "amplitude": 0.08,
+            "period": 13
+          },
+          {
+            "formula": "warp",
+            "repeat": 3,
+            "julia": false,
+            "re": -0.745,
+            "im": 0.186,
+            "drift": false,
+            "amplitude": 0.03,
+            "period": 12
+          }
+        ]
+      },
+      "palette": "ember",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false
+    },
+    "log": 11.446723568635118,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 102086.7453,
+    "previewMs": 1220.4515999999999,
+    "mediumMs": 7928.338400000001,
+    "reps": 1,
+    "trialsMs": [
+      102086.7453
+    ],
+    "quality": {
+      "significantGroups": 13,
+      "dominantShare": 0.2416593057441563,
+      "variedTiles": 87,
+      "edgeShare": 0.3233942184141457,
+      "backgroundShare": 0.11788901926144678,
+      "detailed": true
+    }
+  },
+  {
+    "key": "warp14",
+    "state": {
+      "name": "Warp 10^14",
+      "span": "33000000000000000000000000000000000000000000000",
+      "digits": 60,
+      "cx": "-559869252718645089372536701152417370819700000000000000000000",
+      "cy": "-432148836817102080070459380319221978657500000000000000000000",
+      "iterations": 200,
+      "type": "studio",
+      "recipe": {
+        "mode": "orbit",
+        "seed": "auto",
+        "coloring": "escape",
+        "trap": 0.5,
+        "memory": -0.5,
+        "sequence": "AABAB",
+        "steps": [
+          {
+            "formula": "z3",
+            "repeat": 1,
+            "julia": true,
+            "re": -0.23,
+            "im": 0.53,
+            "drift": true,
+            "amplitude": 0.08,
+            "period": 13
+          },
+          {
+            "formula": "warp",
+            "repeat": 3,
+            "julia": false,
+            "re": -0.745,
+            "im": 0.186,
+            "drift": false,
+            "amplitude": 0.03,
+            "period": 12
+          }
+        ]
+      },
+      "palette": "ember",
+      "jr": -0.745,
+      "ji": 0.186,
+      "shift": 0,
+      "auto": false
+    },
+    "log": 13.999999999999996,
+    "width": 1010,
+    "height": 751,
+    "lanes": 4,
+    "totalMs": 97557.78880000001,
+    "previewMs": 1127.4412000000011,
+    "mediumMs": 7509.559999999998,
+    "reps": 1,
+    "trialsMs": [
+      97557.78880000001
+    ],
+    "quality": {
+      "significantGroups": 13,
+      "dominantShare": 0.24321498727768914,
+      "variedTiles": 67,
+      "edgeShare": 0.1185447504354041,
+      "backgroundShare": 0.0544475352994687,
+      "detailed": true
+    }
+  }
+]

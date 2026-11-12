@@ -1,0 +1,141 @@
+{
+  "width": 320,
+  "height": 200,
+  "iterations": 200,
+  "workersPerRender": 1,
+  "milliseconds": "Total render time including preview passes",
+  "measurements": [
+    {
+      "name": "lyap",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 5147,
+      "after": 3754,
+      "exactBefore": 64000,
+      "exactAfter": 64000,
+      "maxError": 7.105427357601002E-15,
+      "changedClass": 0,
+      "changed": 4881
+    },
+    {
+      "name": "lyap40",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 6258,
+      "after": 4799,
+      "exactBefore": 63999,
+      "exactAfter": 63999,
+      "maxError": 1.4210854715202004E-14,
+      "changedClass": 0,
+      "changed": 3237
+    },
+    {
+      "name": "cubic",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 21963,
+      "after": 1877,
+      "exactBefore": 63875,
+      "exactAfter": 274,
+      "maxError": 1.1368683772161603E-11,
+      "changedClass": 0,
+      "changed": 9758
+    },
+    {
+      "name": "rings",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 4834,
+      "after": 3348,
+      "exactBefore": 35157,
+      "exactAfter": 35157,
+      "maxError": 0,
+      "changedClass": 0,
+      "changed": 0
+    },
+    {
+      "name": "nova",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 27190,
+      "after": 22722,
+      "exactBefore": 64000,
+      "exactAfter": 54172,
+      "maxError": 2.842170943040401E-14,
+      "changedClass": 0,
+      "changed": 5
+    },
+    {
+      "name": "magnet",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 29401,
+      "after": 20176,
+      "exactBefore": 64000,
+      "exactAfter": 37352,
+      "maxError": 2.5295321393059567E-12,
+      "changedClass": 0,
+      "changed": 2645
+    },
+    {
+      "name": "phoenix",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 8312,
+      "after": 5461,
+      "exactBefore": 64000,
+      "exactAfter": 32670,
+      "maxError": 1.4210854715202004E-13,
+      "changedClass": 0,
+      "changed": 8672
+    },
+    {
+      "name": "sineParam",
+      "width": 320,
+      "height": 200,
+      "iterations": 200,
+      "before": 58976,
+      "after": 12576,
+      "exactBefore": 55319,
+      "exactAfter": 12184,
+      "maxError": 1.27613475342514E-11,
+      "changedClass": 0,
+      "changed": 11216
+    }
+  ],
+  "reciprocalTrial": [
+    {
+      "name": "nova",
+      "width": 96,
+      "height": 60,
+      "iterations": 200,
+      "before": 2357,
+      "after": 2511,
+      "exactBefore": 5094,
+      "exactAfter": 5094,
+      "maxError": 0,
+      "changedClass": 0,
+      "changed": 0
+    },
+    {
+      "name": "magnet",
+      "width": 96,
+      "height": 60,
+      "iterations": 200,
+      "before": 2409,
+      "after": 2447,
+      "exactBefore": 4269,
+      "exactAfter": 4269,
+      "maxError": 0,
+      "changedClass": 0,
+      "changed": 0
+    }
+  ]
+}
